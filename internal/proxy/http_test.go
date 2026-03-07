@@ -647,6 +647,32 @@ func TestHTTPProxyRequestIDTooLong(t *testing.T) {
 	assert.Len(t, generatedID, 32)
 }
 
+func TestHTTPProxyRequestIDControlChars(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jsonrpc.Message{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Result:  json.RawMessage(`{}`),
+		})
+	})
+
+	chain := intercept.NewChain()
+	proxy := newTestProxy(upstream.URL, chain, nil, 0)
+	defer proxy.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.Header.Set("X-Request-Id", "bad\x00id\x0d\x0a")
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	// 制御文字を含むリクエスト ID は再生成される
+	generatedID := rec.Header().Get("X-Request-Id")
+	assert.Len(t, generatedID, 32)
+}
+
 func TestHTTPProxyBatchEmptyArray(t *testing.T) {
 	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("upstream should not be called for empty batch")
@@ -657,6 +683,30 @@ func TestHTTPProxyBatchEmptyArray(t *testing.T) {
 	defer proxy.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`[]`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHTTPProxyBatchTooLarge(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called for oversized batch")
+	})
+
+	chain := intercept.NewChain()
+	proxy := newTestProxy(upstream.URL, chain, nil, 0)
+	defer proxy.Close()
+
+	// maxBatchSize (100) を超えるバッチを生成
+	var msgs []string
+	for i := 0; i < 101; i++ {
+		msgs = append(msgs, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/list","params":{}}`, i))
+	}
+	batchBody := "[" + strings.Join(msgs, ",") + "]"
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(batchBody))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 

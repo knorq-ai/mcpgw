@@ -22,6 +22,9 @@ import (
 // 超過時は切り詰められ、パース失敗として fail-open で処理される。
 const maxBodySize = 10 * 1024 * 1024
 
+// maxBatchSize はバッチ JSON-RPC リクエストの最大メッセージ数。
+// 大量メッセージによる CPU・メモリ消費の増幅攻撃を防止する。
+const maxBatchSize = 100
 
 // HTTPProxyConfig は HTTPProxy の設定。
 type HTTPProxyConfig struct {
@@ -134,13 +137,27 @@ func generateRequestID() string {
 	return hex.EncodeToString(b)
 }
 
+// isValidRequestID はリクエスト ID のバリデーションを行う。
+// 空文字、128 文字超過、制御文字を含む場合は false を返す。
+func isValidRequestID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // ServeHTTP は HTTP リクエストをメソッドに応じて振り分ける。
 func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	// リクエスト ID の取得または生成
 	reqID := r.Header.Get("X-Request-Id")
-	if reqID == "" || len(reqID) > 128 {
+	if !isValidRequestID(reqID) {
 		reqID = generateRequestID()
 	}
 	w.Header().Set("X-Request-Id", reqID)
@@ -309,7 +326,7 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 
-	if len(rawMessages) == 0 {
+	if len(rawMessages) == 0 || len(rawMessages) > maxBatchSize {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}

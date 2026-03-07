@@ -31,8 +31,10 @@ var wrapCmd = &cobra.Command{
 }
 
 func init() {
-	home, _ := os.UserHomeDir()
-	defaultLog := filepath.Join(home, ".mcpgw", "audit.jsonl")
+	var defaultLog string
+	if home, err := os.UserHomeDir(); err == nil {
+		defaultLog = filepath.Join(home, ".mcpgw", "audit.jsonl")
+	}
 	wrapCmd.Flags().StringVar(&wrapAuditLogPath, "audit-log", defaultLog, "監査ログファイルのパス")
 	wrapCmd.Flags().StringVar(&wrapPolicyPath, "policy", "", "ポリシー YAML ファイルのパス")
 	rootCmd.AddCommand(wrapCmd)

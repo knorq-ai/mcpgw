@@ -161,7 +161,7 @@ Client ──► [CORS middleware] ──► [mcpgw proxy/wrap] ──► Upstre
 ```
 
 - すべての JSON-RPC メッセージ（client-to-server）は interceptor chain を通過してから転送される
-- Server-to-client メッセージも interceptor chain を通過する（SSE イベントは個別に検査される）
+- Server-to-client メッセージは監査ログのため interceptor chain を通過するが、ポリシールールは client-to-server 方向のみ評価される（S→C はポリシーに対して fail-open）。SSE イベントは個別に検査される
 - バッチ JSON-RPC リクエストに対応 — バッチ内の各メッセージが個別にフィルタリングされる
 - ポリシーエンジンは `atomic.Pointer` によるロックフリーのホットリロードを実現 — `SIGHUP` でダウンタイムなし
 - 監査ログエントリにはタイムスタンプ、方向、メソッド、アクション（pass/block）、理由、`request_id` が含まれる

@@ -161,7 +161,7 @@ Management server (:9091) ──► /healthz, /metrics (Prometheus)
 ```
 
 - Every JSON-RPC message (client-to-server) passes through the interceptor chain before forwarding
-- Server-to-client messages also pass through the interceptor chain (SSE events are inspected individually)
+- Server-to-client messages pass through the interceptor chain for audit logging, but policy rules only evaluate client-to-server direction (S→C is fail-open for policy). SSE events are inspected individually
 - Batch JSON-RPC requests are supported — each message in the batch is individually filtered
 - The policy engine uses `atomic.Pointer` for lock-free hot reload — zero downtime on `SIGHUP`
 - Audit log entries include timestamp, direction, method, action (pass/block), reason, and `request_id`

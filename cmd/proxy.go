@@ -50,8 +50,10 @@ var proxyCmd = &cobra.Command{
 }
 
 func init() {
-	home, _ := os.UserHomeDir()
-	defaultLog := filepath.Join(home, ".mcpgw", "audit.jsonl")
+	var defaultLog string
+	if home, err := os.UserHomeDir(); err == nil {
+		defaultLog = filepath.Join(home, ".mcpgw", "audit.jsonl")
+	}
 
 	proxyCmd.Flags().StringVar(&proxyUpstream, "upstream", "", "upstream MCP サーバーの URL")
 	proxyCmd.Flags().StringVar(&proxyListen, "listen", ":9090", "リッスンアドレス")

@@ -1,10 +1,12 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -712,4 +714,293 @@ func TestHTTPProxyBatchTooLarge(t *testing.T) {
 
 	proxy.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHTTPProxyRequestTimeout(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second) // upstream が遅延
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jsonrpc.Message{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Result:  json.RawMessage(`{}`),
+		})
+	})
+
+	chain := intercept.NewChain()
+	proxy := NewHTTPProxy(HTTPProxyConfig{
+		Upstream:       upstream.URL,
+		Chain:          chain,
+		RequestTimeout: 1 * time.Second,
+	})
+	defer proxy.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadGateway, rec.Code, "タイムアウトで 502 が返る")
+}
+
+func TestHTTPProxyUpstreamReady(t *testing.T) {
+	// 到達可能な upstream
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	chain := intercept.NewChain()
+	proxy := newTestProxy(upstream.URL, chain, nil, 0)
+	defer proxy.Close()
+
+	assert.True(t, proxy.UpstreamReady(), "到達可能な upstream で true を返す")
+
+	// 到達不能な upstream
+	proxy2 := newTestProxy("http://127.0.0.1:1", chain, nil, 0)
+	defer proxy2.Close()
+
+	assert.False(t, proxy2.UpstreamReady(), "到達不能な upstream で false を返す")
+}
+
+func TestHTTPProxyUpstreamReadyUsesReadyClient(t *testing.T) {
+	// readyClient と client が分離されていることを検証する。
+	// upstream は到達可能だが、production client の transport を閉じて使用不能にする。
+	// readyClient 経由なら成功するはず。
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	chain := intercept.NewChain()
+	proxy := NewHTTPProxy(HTTPProxyConfig{
+		Upstream: upstream.URL,
+		Chain:    chain,
+	})
+	defer proxy.Close()
+
+	// production client の transport を閉じて使用不能にする
+	proxy.client.Transport.(*http.Transport).CloseIdleConnections()
+	proxy.client = &http.Client{
+		Transport: &http.Transport{
+			// 即座にタイムアウトする transport
+			ResponseHeaderTimeout: 1 * time.Nanosecond,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return nil, net.ErrClosed
+			},
+		},
+	}
+
+	// readySnap をクリアしてキャッシュを無効化
+	proxy.readySnap.Store(nil)
+
+	// readyClient は正常な transport を持つので、UpstreamReady は true を返す
+	assert.True(t, proxy.UpstreamReady(), "readyClient 経由で upstream に到達できる")
+}
+
+func TestHTTPProxyCircuitBreakerIntegration(t *testing.T) {
+	// 到達不能な upstream でサーキットブレーカーが open になることを確認
+	chain := intercept.NewChain()
+	proxy := NewHTTPProxy(HTTPProxyConfig{
+		Upstream:       "http://127.0.0.1:1",
+		Chain:          chain,
+		RequestTimeout: 500 * time.Millisecond,
+		CircuitBreaker: CircuitBreakerConfig{
+			MaxFailures: 3,
+			Timeout:     100 * time.Millisecond,
+		},
+	})
+	defer proxy.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+
+	// 3 回失敗して open にする
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusBadGateway, rec.Code)
+	}
+
+	// open 状態 → 503
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "CB open で 503 が返る")
+
+	// timeout 後 → half-open → 到達可能な upstream に差し替え
+	time.Sleep(150 * time.Millisecond)
+
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jsonrpc.Message{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Result:  json.RawMessage(`{}`),
+		})
+	})
+	proxy.upstream = upstream.URL
+
+	req = httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "half-open → 成功 → closed に復帰")
+}
+
+func TestHTTPProxySSEIdleTimeout(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+
+		// 1 イベント送信後、長時間待機（アイドルタイムアウトを超過させる）
+		fmt.Fprintf(w, "data: %s\n\n", `{"jsonrpc":"2.0","id":1,"result":{}}`)
+		flusher.Flush()
+
+		// クライアント側が切断するまでブロック
+		<-r.Context().Done()
+	})
+
+	chain := intercept.NewChain()
+	proxy := NewHTTPProxy(HTTPProxyConfig{
+		Upstream:       upstream.URL,
+		Chain:          chain,
+		SSEIdleTimeout: 100 * time.Millisecond,
+	})
+	defer proxy.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	start := time.Now()
+	proxy.ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// 1 イベントは受信できている
+	scanner := NewSSEScanner(strings.NewReader(rec.Body.String()))
+	var events []*SSEEvent
+	for scanner.Scan() {
+		ev := scanner.Event()
+		events = append(events, &SSEEvent{Data: ev.Data})
+	}
+	assert.Len(t, events, 1)
+
+	// アイドルタイムアウト付近で切断されている（余裕を持って 2 秒以内）
+	assert.Less(t, elapsed, 2*time.Second, "SSE アイドルタイムアウトでストリームが閉じられる")
+}
+
+func TestSetProxyHeadersStripsPort(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		// X-Forwarded-For にポートが含まれていないことを確認
+		xff := r.Header.Get("X-Forwarded-For")
+		assert.NotContains(t, xff, ":", "X-Forwarded-For にポートが含まれていない")
+		assert.Equal(t, "192.0.2.1", xff)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(jsonrpc.Message{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`1`),
+			Result:  json.RawMessage(`{}`),
+		})
+	})
+
+	chain := intercept.NewChain()
+	proxy := newTestProxy(upstream.URL, chain, nil, 0)
+	defer proxy.Close()
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(reqBody))
+	req.RemoteAddr = "192.0.2.1:54321"
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHTTPProxyGetTracksSession(t *testing.T) {
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Mcp-Session-Id", "get-session-456")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: %s\n\n", `{"jsonrpc":"2.0","method":"notifications/progress","params":{}}`)
+		flusher.Flush()
+	})
+
+	chain := intercept.NewChain()
+	proxy := newTestProxy(upstream.URL, chain, nil, 0)
+	defer proxy.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	// GET 経由のセッションも追跡されている
+	proxy.mu.Lock()
+	_, tracked := proxy.sessions["get-session-456"]
+	proxy.mu.Unlock()
+	assert.True(t, tracked, "GET 経由のセッションが追跡される")
+}
+
+// --- newContextReader tests ---
+
+func TestContextReaderNormalEOF(t *testing.T) {
+	data := []byte("hello, world")
+	ctx := context.Background()
+	r := newContextReader(ctx, strings.NewReader(string(data)))
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
+}
+
+func TestContextReaderCancelMidRead(t *testing.T) {
+	// ブロックする Reader: データを送らずに待つ
+	pr, pw := io.Pipe()
+	defer pw.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r := newContextReader(ctx, pr)
+
+	// 別 goroutine で Read を開始
+	type result struct {
+		n   int
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, err := r.Read(buf)
+		ch <- result{n, err}
+	}()
+
+	// 50ms 後にキャンセル → Read がすぐ返る
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case res := <-ch:
+		assert.Error(t, res.err)
+		assert.ErrorIs(t, res.err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read がキャンセル後にタイムアウト")
+	}
+}
+
+func TestContextReaderLargePayload(t *testing.T) {
+	// 1MB のデータがパイプ経由で正しく読み取れること
+	data := make([]byte, 1024*1024)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	ctx := context.Background()
+	r := newContextReader(ctx, bytes.NewReader(data))
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	assert.Equal(t, data, got)
 }

@@ -14,14 +14,15 @@ type Config struct {
 	Listen    string          `yaml:"listen"`
 	Policy    string          `yaml:"policy"`
 	AuditLog  string          `yaml:"audit_log"`
-	Auth      AuthConfig      `yaml:"auth"`
-	RateLimit RateLimitConfig `yaml:"rate_limit"`
-	Session   SessionConfig   `yaml:"session"`
-	TLS       TLSConfig       `yaml:"tls"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Metrics   MetricsConfig   `yaml:"metrics"`
-	CORS      CORSConfig      `yaml:"cors"`
-	Transport TransportConfig `yaml:"transport"`
+	Auth           AuthConfig           `yaml:"auth"`
+	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
+	Session        SessionConfig        `yaml:"session"`
+	TLS            TLSConfig            `yaml:"tls"`
+	Logging        LoggingConfig        `yaml:"logging"`
+	Metrics        MetricsConfig        `yaml:"metrics"`
+	CORS           CORSConfig           `yaml:"cors"`
+	Transport      TransportConfig      `yaml:"transport"`
+	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 }
 
 // LoggingConfig はログ出力の設定。
@@ -45,6 +46,14 @@ type TransportConfig struct {
 	MaxIdleConns        int    `yaml:"max_idle_conns"`
 	MaxIdleConnsPerHost int    `yaml:"max_idle_conns_per_host"`
 	IdleConnTimeout     string `yaml:"idle_conn_timeout"`
+	RequestTimeout      string `yaml:"request_timeout"`
+	SSEIdleTimeout      string `yaml:"sse_idle_timeout"`
+}
+
+// CircuitBreakerConfig はサーキットブレーカーの設定。
+type CircuitBreakerConfig struct {
+	MaxFailures int    `yaml:"max_failures"`
+	Timeout     string `yaml:"timeout"`
 }
 
 // TLSConfig は TLS 終端の設定。

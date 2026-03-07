@@ -45,6 +45,15 @@ var (
 			Help:      "Upstream 通信エラー数",
 		},
 	)
+
+	// CircuitBreakerTrips はサーキットブレーカーが open 状態でリクエストを拒否した回数。
+	CircuitBreakerTrips = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mcpgw",
+			Name:      "circuit_breaker_trips_total",
+			Help:      "サーキットブレーカーによるリクエスト拒否数",
+		},
+	)
 )
 
 var registerOnce sync.Once
@@ -52,6 +61,6 @@ var registerOnce sync.Once
 // Register は全メトリクスを Prometheus デフォルトレジストリに登録する。
 func Register() {
 	registerOnce.Do(func() {
-		prometheus.MustRegister(RequestsTotal, RequestDuration, ActiveSessions, UpstreamErrors)
+		prometheus.MustRegister(RequestsTotal, RequestDuration, ActiveSessions, UpstreamErrors, CircuitBreakerTrips)
 	})
 }

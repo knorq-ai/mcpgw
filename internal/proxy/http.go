@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/knorq-ai/mcpgw/internal/intercept"
@@ -21,6 +23,17 @@ import (
 // maxBodySize はリクエスト/レスポンスボディの最大サイズ（10MB）。
 // 超過時は切り詰められ、パース失敗として fail-open で処理される。
 const maxBodySize = 10 * 1024 * 1024
+
+// mustMarshalMessage は jsonrpc.Message を JSON バイト列にマーシャルする。
+// 失敗時はログ出力し、フォールバックの JSON エラーレスポンスを返す。
+func mustMarshalMessage(msg *jsonrpc.Message) []byte {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		slog.Error("json.Marshal failed for JSON-RPC message", "error", err)
+		return []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
+	}
+	return data
+}
 
 // maxBatchSize はバッチ JSON-RPC リクエストの最大メッセージ数。
 // 大量メッセージによる CPU・メモリ消費の増幅攻撃を防止する。
@@ -35,20 +48,35 @@ type HTTPProxyConfig struct {
 	MaxIdleConns        int
 	MaxIdleConnsPerHost int
 	IdleConnTimeout     time.Duration
+	RequestTimeout      time.Duration
+	SSEIdleTimeout      time.Duration
+	CircuitBreaker      CircuitBreakerConfig
+}
+
+// CircuitBreakerConfig はサーキットブレーカーの設定（proxy パッケージ内用）。
+type CircuitBreakerConfig struct {
+	MaxFailures int
+	Timeout     time.Duration
 }
 
 // HTTPProxy は MCP Streamable HTTP トランスポートのリバースプロキシ。
 // POST/GET/DELETE を単一エンドポイントで処理し、interceptor chain と audit logger を適用する。
 type HTTPProxy struct {
-	upstream string
-	chain    *intercept.Chain
-	audit    *intercept.AuditLogger
-	client   *http.Client // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
-	mu       sync.Mutex
-	sessions map[string]time.Time // sid → 最終アクセス時刻
-	ttl      time.Duration
-	stopCh   chan struct{}
-	stopped  chan struct{}
+	upstream       string
+	chain          *intercept.Chain
+	audit          *intercept.AuditLogger
+	client         *http.Client // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
+	mu             sync.Mutex
+	sessions       map[string]time.Time // sid → 最終アクセス時刻
+	ttl            time.Duration
+	requestTimeout time.Duration
+	sseIdleTimeout time.Duration
+	cb             *circuitBreaker
+	readyClient    *http.Client                  // readiness probe 専用（本番接続プールと分離）
+	readySnap      atomic.Pointer[readySnapshot] // UpstreamReady キャッシュ
+	readyMu        sync.Mutex                    // UpstreamReady の同時 HEAD リクエストを防止
+	stopCh         chan struct{}
+	stopped        chan struct{}
 }
 
 // NewHTTPProxy は HTTPProxy を生成する。
@@ -69,6 +97,19 @@ func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 	if idleTimeout <= 0 {
 		idleTimeout = 90 * time.Second
 	}
+	requestTimeout := cfg.RequestTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = 60 * time.Second
+	}
+	sseIdleTimeout := cfg.SSEIdleTimeout
+	if sseIdleTimeout <= 0 {
+		sseIdleTimeout = 5 * time.Minute
+	}
+
+	var cb *circuitBreaker
+	if cfg.CircuitBreaker.MaxFailures > 0 {
+		cb = newCircuitBreaker(cfg.CircuitBreaker.MaxFailures, cfg.CircuitBreaker.Timeout)
+	}
 
 	p := &HTTPProxy{
 		upstream: strings.TrimRight(cfg.Upstream, "/"),
@@ -79,13 +120,23 @@ func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 				MaxIdleConns:          maxIdle,
 				MaxIdleConnsPerHost:   maxIdlePerHost,
 				IdleConnTimeout:       idleTimeout,
-				ResponseHeaderTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: requestTimeout,
 			},
 		},
-		sessions: make(map[string]time.Time),
-		ttl:      sessionTTL,
-		stopCh:   make(chan struct{}),
-		stopped:  make(chan struct{}),
+		sessions:       make(map[string]time.Time),
+		ttl:            sessionTTL,
+		requestTimeout: requestTimeout,
+		sseIdleTimeout: sseIdleTimeout,
+		cb:             cb,
+		readyClient: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:    1,
+				IdleConnTimeout: 10 * time.Second,
+			},
+		},
+		stopCh:  make(chan struct{}),
+		stopped: make(chan struct{}),
 	}
 	go p.cleanupLoop()
 	return p
@@ -99,6 +150,78 @@ func (p *HTTPProxy) Close() {
 		close(p.stopCh)
 	}
 	<-p.stopped
+}
+
+// doUpstream はサーキットブレーカーを経由して upstream にリクエストを送信する。
+// 失敗時はエラーレスポンスをクライアントに書き込み nil を返す。
+func (p *HTTPProxy) doUpstream(w http.ResponseWriter, req *http.Request) *http.Response {
+	allowed, state := p.cb.Allow()
+	if !allowed {
+		if state == stateOpen {
+			metrics.CircuitBreakerTrips.Inc()
+		}
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return nil
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		// クライアント切断による失敗は upstream 障害としてカウントしない
+		if req.Context().Err() == nil {
+			p.cb.RecordFailure()
+			metrics.UpstreamErrors.Inc()
+		}
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return nil
+	}
+	p.cb.RecordSuccess()
+	return resp
+}
+
+// readyCacheTTL は UpstreamReady キャッシュの有効期間。
+const readyCacheTTL = 2 * time.Second
+
+// readySnapshot は UpstreamReady の結果と時刻をまとめたアトミックスナップショット。
+type readySnapshot struct {
+	ready bool
+	at    time.Time
+}
+
+// UpstreamReady は upstream への到達性を確認する。
+// 結果を 2 秒間キャッシュし、readiness probe による upstream への負荷を軽減する。
+// 同時呼び出しは readyMu で直列化し、thundering herd を防止する。
+// 本番接続プールとは分離した readyClient を使用する。
+func (p *HTTPProxy) UpstreamReady() bool {
+	if snap := p.readySnap.Load(); snap != nil && time.Since(snap.at) < readyCacheTTL {
+		return snap.ready
+	}
+
+	// TryLock で排他 — 取得できなかった場合はキャッシュ（stale でも）を返す
+	if !p.readyMu.TryLock() {
+		if snap := p.readySnap.Load(); snap != nil {
+			return snap.ready
+		}
+		return true // キャッシュ未生成時は楽観的に true
+	}
+	defer p.readyMu.Unlock()
+
+	// ロック取得後にキャッシュを再確認（他の goroutine が更新済みかもしれない）
+	if snap := p.readySnap.Load(); snap != nil && time.Since(snap.at) < readyCacheTTL {
+		return snap.ready
+	}
+
+	req, err := http.NewRequest(http.MethodHead, p.upstream, nil)
+	if err != nil {
+		p.readySnap.Store(&readySnapshot{ready: false, at: time.Now()})
+		return false
+	}
+	resp, err := p.readyClient.Do(req)
+	if err != nil {
+		p.readySnap.Store(&readySnapshot{ready: false, at: time.Now()})
+		return false
+	}
+	resp.Body.Close()
+	p.readySnap.Store(&readySnapshot{ready: true, at: time.Now()})
+	return true
 }
 
 // cleanupLoop は 1 分間隔で TTL 超過セッションを削除する。
@@ -226,8 +349,7 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			errResp := buildErrorResponse(parsed.ID, code, result.Reason)
-			data, _ := json.Marshal(errResp)
-			w.Write(data)
+			w.Write(mustMarshalMessage(errResp))
 		} else {
 			// リクエスト以外のブロック（通知等）— 空レスポンス
 			w.WriteHeader(http.StatusAccepted)
@@ -238,6 +360,8 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 	metrics.RequestsTotal.WithLabelValues(method, action).Inc()
 
 	// upstream に転送
+	// POST は SSE レスポンスの可能性があるため context timeout は使わず、
+	// Transport.ResponseHeaderTimeout でヘッダ応答のタイムアウトを制御する。
 	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, p.upstream, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -258,10 +382,8 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		upReq.Header.Set("X-Request-Id", reqID)
 	}
 
-	resp, err := p.client.Do(upReq)
-	if err != nil {
-		metrics.UpstreamErrors.Inc()
-		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+	resp := p.doUpstream(w, upReq)
+	if resp == nil {
 		return
 	}
 	defer resp.Body.Close()
@@ -280,8 +402,12 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// JSON レスポンスの場合
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	// JSON レスポンスの場合 — タイムアウト付きで読み取り。
+	// ResponseHeaderTimeout はヘッダ到着のみを制御するため、
+	// ボディ読み取りには別途 requestTimeout を適用して slow-body 攻撃を防ぐ。
+	readCtx, readCancel := context.WithTimeout(r.Context(), p.requestTimeout)
+	defer readCancel()
+	respBody, err := io.ReadAll(io.LimitReader(newContextReader(readCtx, resp.Body), maxBodySize))
 	if err != nil {
 		metrics.UpstreamErrors.Inc()
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -305,8 +431,7 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		if respParsed != nil && respParsed.IsResponse() {
 			w.Header().Set("Content-Type", "application/json")
 			errResp := buildErrorResponse(respParsed.ID, -32603, "blocked by policy")
-			data, _ := json.Marshal(errResp)
-			w.Write(data)
+			w.Write(mustMarshalMessage(errResp))
 		} else {
 			w.WriteHeader(http.StatusOK)
 		}
@@ -360,8 +485,7 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 					code = -32600
 				}
 				errResp := buildErrorResponse(parsed.ID, code, result.Reason)
-				data, _ := json.Marshal(errResp)
-				errorResponses = append(errorResponses, data)
+				errorResponses = append(errorResponses, mustMarshalMessage(errResp))
 			}
 			// 通知のブロックはサイレントドロップ
 		} else {
@@ -389,7 +513,14 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 
-	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, p.upstream, bytes.NewReader(batchBody))
+	// バッチは SSE レスポンスにならないため、context timeout で全体（接続+転送）のタイムアウトを制御する。
+	// 単一 POST は SSE の可能性があるため context timeout を使わず ResponseHeaderTimeout に任せる。
+	// Transport の ResponseHeaderTimeout（= requestTimeout）も存在するが、context deadline の方が
+	// 先に発火するため実質的に context timeout が支配する。
+	batchCtx, batchCancel := context.WithTimeout(r.Context(), p.requestTimeout)
+	defer batchCancel()
+
+	upReq, err := http.NewRequestWithContext(batchCtx, http.MethodPost, p.upstream, bytes.NewReader(batchBody))
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -404,10 +535,8 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 		upReq.Header.Set("X-Request-Id", reqID)
 	}
 
-	resp, err := p.client.Do(upReq)
-	if err != nil {
-		metrics.UpstreamErrors.Inc()
-		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+	resp := p.doUpstream(w, upReq)
+	if resp == nil {
 		return
 	}
 	defer resp.Body.Close()
@@ -461,8 +590,7 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 		if result.Action == intercept.ActionBlock {
 			if parsed != nil && parsed.IsResponse() {
 				errResp := buildErrorResponse(parsed.ID, -32603, "blocked by policy")
-				data, _ := json.Marshal(errResp)
-				processedResponses = append(processedResponses, data)
+				processedResponses = append(processedResponses, mustMarshalMessage(errResp))
 			}
 		} else {
 			processedResponses = append(processedResponses, raw)
@@ -480,11 +608,22 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 
 // marshalBatchResponse はレスポンス配列を JSON 配列にマーシャルする。
 func marshalBatchResponse(responses []json.RawMessage) []byte {
-	data, _ := json.Marshal(responses)
+	data, err := json.Marshal(responses)
+	if err != nil {
+		slog.Error("json.Marshal failed for batch response", "error", err)
+		return []byte(`[]`)
+	}
 	return data
 }
 
 // streamSSE は upstream からの SSE ストリームを傍受しながらクライアントに転送する。
+// アイドルタイムアウトを超過するとストリームを閉じる。
+//
+// スキャナ goroutine は body.Read() でブロックする可能性がある。
+// アイドルタイムアウトや ctx キャンセルで本関数が return した後も、
+// スキャナ goroutine は body.Read() の完了まで残る。
+// 呼び出し元の defer resp.Body.Close() により body が閉じられ、
+// Read がエラーを返してスキャナ goroutine は終了する。
 func (p *HTTPProxy) streamSSE(ctx context.Context, w http.ResponseWriter, body io.ReadCloser) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -498,46 +637,79 @@ func (p *HTTPProxy) streamSSE(ctx context.Context, w http.ResponseWriter, body i
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	scanner := NewSSEScanner(body)
-	for scanner.Scan() {
-		if ctx.Err() != nil {
+	ch := make(chan *SSEEvent, 1)
+	go func() {
+		defer close(ch)
+		scanner := NewSSEScanner(body)
+		for scanner.Scan() {
+			ev := scanner.Event()
+			select {
+			case ch <- &SSEEvent{ID: ev.ID, Event: ev.Event, Data: ev.Data}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	idleTimer := time.NewTimer(p.sseIdleTimeout)
+	defer idleTimer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
 			return
-		}
-
-		ev := scanner.Event()
-
-		// Data から JSON-RPC メッセージを抽出して interceptor chain を実行
-		var msg jsonrpc.Message
-		var parsed *jsonrpc.Message
-		raw := []byte(ev.Data)
-		if err := json.Unmarshal(raw, &msg); err == nil {
-			parsed = &msg
-		}
-
-		result := p.chain.Process(ctx, intercept.DirServerToClient, parsed, raw)
-		if p.audit != nil {
-			p.audit.Log(ctx, intercept.DirServerToClient, parsed, raw, result)
-		}
-
-		if result.Action == intercept.ActionBlock {
-			// S→C ブロック — イベントをドロップしてログ出力
-			slog.Warn("SSE event blocked", "reason", result.Reason)
-			continue
-		}
-
-		// クライアントに転送
-		formatted := FormatSSEEvent(ev)
-		if _, err := w.Write(formatted); err != nil {
-			slog.Error("SSE write error", "error", err)
+		case <-idleTimer.C:
+			slog.Warn("SSE idle timeout reached, closing stream")
 			return
+		case ev, ok := <-ch:
+			if !ok {
+				return
+			}
+
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(p.sseIdleTimeout)
+
+			// Data から JSON-RPC メッセージを抽出して interceptor chain を実行
+			var msg jsonrpc.Message
+			var parsed *jsonrpc.Message
+			raw := []byte(ev.Data)
+			if err := json.Unmarshal(raw, &msg); err == nil {
+				parsed = &msg
+			}
+
+			result := p.chain.Process(ctx, intercept.DirServerToClient, parsed, raw)
+			if p.audit != nil {
+				p.audit.Log(ctx, intercept.DirServerToClient, parsed, raw, result)
+			}
+
+			if result.Action == intercept.ActionBlock {
+				slog.Warn("SSE event blocked", "reason", result.Reason)
+				continue
+			}
+
+			formatted := FormatSSEEvent(ev)
+			if _, err := w.Write(formatted); err != nil {
+				slog.Error("SSE write error", "error", err)
+				return
+			}
+			flusher.Flush()
 		}
-		flusher.Flush()
 	}
 }
 
 // setProxyHeaders は upstream リクエストにプロキシヘッダを設定する。
 func setProxyHeaders(upReq *http.Request, r *http.Request) {
-	if clientIP := r.RemoteAddr; clientIP != "" {
+	if r.RemoteAddr != "" {
+		// RemoteAddr は "IP:port" 形式 — XFF には IP のみ設定する（RFC 7239）
+		clientIP := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			clientIP = host
+		}
 		if prior := r.Header.Get("X-Forwarded-For"); prior != "" {
 			upReq.Header.Set("X-Forwarded-For", prior+", "+clientIP)
 		} else {
@@ -568,15 +740,14 @@ func (p *HTTPProxy) handleGet(w http.ResponseWriter, r *http.Request) {
 		upReq.Header.Set("X-Request-Id", reqID)
 	}
 
-	resp, err := p.client.Do(upReq)
-	if err != nil {
-		metrics.UpstreamErrors.Inc()
-		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+	resp := p.doUpstream(w, upReq)
+	if resp == nil {
 		return
 	}
 	defer resp.Body.Close()
 
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+		p.trackSession(sid)
 		w.Header().Set("Mcp-Session-Id", sid)
 	}
 
@@ -586,19 +757,24 @@ func (p *HTTPProxy) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 非 SSE レスポンス → そのまま転送
+	// 非 SSE レスポンス → サイズ制限付きで転送
 	if ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxBodySize)); err != nil {
+		slog.Error("io.Copy failed in handleGet", "error", err)
+	}
 }
 
 // handleDelete はセッション終了リクエストを処理する。
 func (p *HTTPProxy) handleDelete(w http.ResponseWriter, r *http.Request) {
 	sid := r.Header.Get("Mcp-Session-Id")
 
-	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodDelete, p.upstream, nil)
+	delCtx, delCancel := context.WithTimeout(r.Context(), p.requestTimeout)
+	defer delCancel()
+
+	upReq, err := http.NewRequestWithContext(delCtx, http.MethodDelete, p.upstream, nil)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -611,10 +787,8 @@ func (p *HTTPProxy) handleDelete(w http.ResponseWriter, r *http.Request) {
 		upReq.Header.Set("X-Request-Id", reqID)
 	}
 
-	resp, err := p.client.Do(upReq)
-	if err != nil {
-		metrics.UpstreamErrors.Inc()
-		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+	resp := p.doUpstream(w, upReq)
+	if resp == nil {
 		return
 	}
 	defer resp.Body.Close()
@@ -628,7 +802,31 @@ func (p *HTTPProxy) handleDelete(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxBodySize)); err != nil {
+		slog.Error("io.Copy failed in handleDelete", "error", err)
+	}
+}
+
+// newContextReader は context のキャンセルを io.Reader に伝播する Reader を返す。
+// 内部で io.Pipe と 1 つのコピー goroutine を使用する。
+// ctx キャンセルは context.AfterFunc で pw を閉じることで伝播する。
+// AfterFunc は ctx がキャンセルされるかコピー完了後に stop されるため、
+// ctx にデッドラインがない場合でも goroutine リークしない。
+//
+// 呼び出し元は r（通常 resp.Body）を defer で Close すること。
+// ctx キャンセル時、pw.CloseWithError により pr.Read は ctx.Err() を返す。
+// 正常完了時はコピー goroutine が pw.CloseWithError(nil) で EOF を伝播する。
+func newContextReader(ctx context.Context, r io.Reader) io.Reader {
+	pr, pw := io.Pipe()
+	stop := context.AfterFunc(ctx, func() {
+		pw.CloseWithError(ctx.Err())
+	})
+	go func() {
+		_, err := io.Copy(pw, r)
+		stop()
+		pw.CloseWithError(err)
+	}()
+	return pr
 }
 
 func (p *HTTPProxy) trackSession(sid string) {

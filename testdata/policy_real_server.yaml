@@ -1,0 +1,17 @@
+version: v1
+mode: enforce
+rules:
+  - name: block-env-leak
+    match:
+      methods: ["tools/call"]
+      tools: ["get-env"]
+    action: deny
+  - name: block-long-running
+    match:
+      methods: ["tools/call"]
+      tools: ["trigger-long-running-operation"]
+    action: deny
+  - name: default-allow
+    match:
+      methods: ["*"]
+    action: allow

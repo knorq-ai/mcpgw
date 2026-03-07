@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -93,6 +94,10 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mcpgw: --tls-cert and --tls-key must both be specified")
 	}
 
+	if err := validateConfig(proxyUpstream, proxyTLSCert, proxyTLSKey); err != nil {
+		return fmt.Errorf("mcpgw: %w", err)
+	}
+
 	// 監査ログ
 	logger, err := audit.NewLogger(proxyAuditLogPath, audit.DefaultMaxSize)
 	if err != nil {
@@ -147,6 +152,17 @@ func runProxy(cmd *cobra.Command, args []string) error {
 
 	// トランスポート設定
 	idleConnTimeout := parseDuration(cfg.Transport.IdleConnTimeout, 90*time.Second)
+	requestTimeout := parseDuration(cfg.Transport.RequestTimeout, 60*time.Second)
+	sseIdleTimeout := parseDuration(cfg.Transport.SSEIdleTimeout, 5*time.Minute)
+
+	// サーキットブレーカー設定
+	var cbCfg proxy.CircuitBreakerConfig
+	if cfg.CircuitBreaker.MaxFailures > 0 {
+		cbCfg = proxy.CircuitBreakerConfig{
+			MaxFailures: cfg.CircuitBreaker.MaxFailures,
+			Timeout:     parseDuration(cfg.CircuitBreaker.Timeout, 30*time.Second),
+		}
+	}
 
 	// HTTP プロキシ
 	httpProxy := proxy.NewHTTPProxy(proxy.HTTPProxyConfig{
@@ -157,6 +173,9 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		MaxIdleConns:        cfg.Transport.MaxIdleConns,
 		MaxIdleConnsPerHost: cfg.Transport.MaxIdleConnsPerHost,
 		IdleConnTimeout:     idleConnTimeout,
+		RequestTimeout:      requestTimeout,
+		SSEIdleTimeout:      sseIdleTimeout,
+		CircuitBreaker:      cbCfg,
 	})
 	defer httpProxy.Close()
 
@@ -178,12 +197,17 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// メインサーバー終了時に管理サーバーも停止するための cancel
+	srvCtx, srvCancel := context.WithCancel(ctx)
+	defer srvCancel()
+
 	// 管理サーバー（メトリクス + ヘルスチェック）
 	if cfg.Metrics.Addr != "" {
 		metrics.Register()
 		mgmtMux := http.NewServeMux()
 		mgmtMux.Handle("/metrics", promhttp.Handler())
 		mgmtMux.HandleFunc("/healthz", healthHandler)
+		mgmtMux.HandleFunc("/readyz", readyzHandler(httpProxy))
 		mgmtSrv := &http.Server{
 			Addr:              cfg.Metrics.Addr,
 			Handler:           mgmtMux,
@@ -196,7 +220,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 			}
 		}()
 		go func() {
-			<-ctx.Done()
+			<-srvCtx.Done()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			mgmtSrv.Shutdown(shutdownCtx)
@@ -207,34 +231,53 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	watchPolicyReload(ctx, proxyPolicyPath, policyInterceptor)
 
 	// graceful shutdown
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		slog.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
+		close(shutdownDone)
 	}()
 
 	if proxyTLSCert != "" && proxyTLSKey != "" {
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		slog.Info("proxy listening (TLS)", "addr", proxyListen, "upstream", proxyUpstream)
 		if err := srv.ListenAndServeTLS(proxyTLSCert, proxyTLSKey); err != http.ErrServerClosed {
+			srvCancel() // 管理サーバーも停止
 			return fmt.Errorf("mcpgw: %w", err)
 		}
 	} else {
 		slog.Info("proxy listening", "addr", proxyListen, "upstream", proxyUpstream)
 		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			srvCancel() // 管理サーバーも停止
 			return fmt.Errorf("mcpgw: %w", err)
 		}
 	}
 
+	<-shutdownDone
 	return nil
 }
 
-// healthHandler は /healthz エンドポイントのハンドラ。
+// healthHandler は /healthz エンドポイントのハンドラ（liveness probe）。
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// readyzHandler は /readyz エンドポイントのハンドラ（readiness probe）。
+// upstream への到達性を確認し、不能時は 503 を返す。
+func readyzHandler(hp *proxy.HTTPProxy) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if !hp.UpstreamReady() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"status": "unavailable"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 // mergeConfig は CLI フラグが明示的に設定されていない場合に設定ファイルの値を適用する。
@@ -372,6 +415,31 @@ func loadPublicKey(path string, algo string) (any, error) {
 	}
 
 	return pub, nil
+}
+
+// validateConfig は起動時に設定値を検証する。
+func validateConfig(upstream, tlsCert, tlsKey string) error {
+	u, err := url.Parse(upstream)
+	if err != nil {
+		return fmt.Errorf("invalid upstream URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("upstream URL scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("upstream URL must have a host")
+	}
+	if tlsCert != "" {
+		if _, err := os.Stat(tlsCert); err != nil {
+			return fmt.Errorf("TLS cert file: %w", err)
+		}
+	}
+	if tlsKey != "" {
+		if _, err := os.Stat(tlsKey); err != nil {
+			return fmt.Errorf("TLS key file: %w", err)
+		}
+	}
+	return nil
 }
 
 // parseDuration は文字列を time.Duration に変換する。

@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"strings"
 )
@@ -118,14 +117,20 @@ func parseSSEField(line string) (field, value string) {
 func FormatSSEEvent(ev *SSEEvent) []byte {
 	var b strings.Builder
 	if ev.Event != "" {
-		fmt.Fprintf(&b, "event: %s\n", ev.Event)
+		b.WriteString("event: ")
+		b.WriteString(ev.Event)
+		b.WriteByte('\n')
 	}
 	if ev.ID != "" {
-		fmt.Fprintf(&b, "id: %s\n", ev.ID)
+		b.WriteString("id: ")
+		b.WriteString(ev.ID)
+		b.WriteByte('\n')
 	}
 	for _, line := range strings.Split(ev.Data, "\n") {
-		fmt.Fprintf(&b, "data: %s\n", line)
+		b.WriteString("data: ")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
-	b.WriteString("\n")
+	b.WriteByte('\n')
 	return []byte(b.String())
 }

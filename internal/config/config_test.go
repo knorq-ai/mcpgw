@@ -154,3 +154,22 @@ transport:
 	assert.Equal(t, 20, cfg.Transport.MaxIdleConnsPerHost)
 	assert.Equal(t, "120s", cfg.Transport.IdleConnTimeout)
 }
+
+func TestParseTransportAndCircuitBreakerConfig(t *testing.T) {
+	data := []byte(`
+upstream: http://localhost:8080
+transport:
+  request_timeout: "30s"
+  sse_idle_timeout: "10m"
+circuit_breaker:
+  max_failures: 5
+  timeout: "60s"
+`)
+	cfg, err := Parse(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, "30s", cfg.Transport.RequestTimeout)
+	assert.Equal(t, "10m", cfg.Transport.SSEIdleTimeout)
+	assert.Equal(t, 5, cfg.CircuitBreaker.MaxFailures)
+	assert.Equal(t, "60s", cfg.CircuitBreaker.Timeout)
+}

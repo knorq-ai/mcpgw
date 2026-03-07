@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","description":"Read a file","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},{"name":"exec_command","description":"Execute a command","inputSchema":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}]}}

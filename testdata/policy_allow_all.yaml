@@ -1,0 +1,7 @@
+version: v1
+mode: enforce
+rules:
+  - name: default-allow
+    match:
+      methods: ["*"]
+    action: allow

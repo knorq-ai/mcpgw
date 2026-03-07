@@ -1,0 +1,12 @@
+version: v1
+mode: enforce
+rules:
+  - name: deny-exec
+    match:
+      methods: ["tools/call"]
+      tools: ["exec_*", "run_command"]
+    action: deny
+  - name: default-allow
+    match:
+      methods: ["*"]
+    action: allow

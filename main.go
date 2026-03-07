@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/yuyamorita/mcpgw/cmd"
+	"github.com/knorq-ai/mcpgw/cmd"
 )
 
 func main() {

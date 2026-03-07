@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/yuyamorita/mcpgw/internal/auth"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
-	"github.com/yuyamorita/mcpgw/internal/policy"
+	"github.com/knorq-ai/mcpgw/internal/auth"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/policy"
 )
 
 func newEnforceEngine() *policy.Engine {

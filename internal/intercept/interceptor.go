@@ -3,7 +3,7 @@ package intercept
 import (
 	"context"
 
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // Direction はメッセージの方向を表す。

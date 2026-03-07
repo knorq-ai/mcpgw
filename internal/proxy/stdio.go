@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // syncWriter は io.Writer をミューテックスで保護する。

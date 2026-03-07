@@ -11,10 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yuyamorita/mcpgw/internal/audit"
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
-	"github.com/yuyamorita/mcpgw/internal/policy"
+	"github.com/knorq-ai/mcpgw/internal/audit"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/policy"
 )
 
 func TestPolicyBlocksToolsCall(t *testing.T) {

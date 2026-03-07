@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yuyamorita/mcpgw/internal/audit"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/audit"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // AuditLogger はメッセージと最終判定結果を監査ログに記録する。

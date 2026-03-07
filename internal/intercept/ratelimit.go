@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yuyamorita/mcpgw/internal/auth"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/auth"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // tokenBucket はトークンバケットアルゴリズムの状態。

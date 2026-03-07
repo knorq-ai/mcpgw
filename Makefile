@@ -1,5 +1,5 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -ldflags "-X github.com/yuyamorita/mcpgw/cmd.Version=$(VERSION)"
+LDFLAGS := -ldflags "-X github.com/knorq-ai/mcpgw/cmd.Version=$(VERSION)"
 
 .PHONY: build test vet clean
 

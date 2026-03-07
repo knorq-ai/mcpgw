@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yuyamorita/mcpgw/internal/config"
+	"github.com/knorq-ai/mcpgw/internal/config"
 )
 
 // setupLogging は設定に基づいて slog のデフォルトロガーを初期化する。

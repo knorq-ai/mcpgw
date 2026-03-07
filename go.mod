@@ -1,4 +1,4 @@
-module github.com/yuyamorita/mcpgw
+module github.com/knorq-ai/mcpgw
 
 go 1.25.0
 

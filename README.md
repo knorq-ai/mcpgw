@@ -16,7 +16,7 @@ Two operating modes:
 ## Quick Start
 
 ```bash
-go install github.com/yuyamorita/mcpgw@latest
+go install github.com/knorq-ai/mcpgw@latest
 
 # HTTP proxy mode
 mcpgw proxy --upstream http://localhost:8080 --policy policy.yaml

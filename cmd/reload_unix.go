@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/policy"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/policy"
 )
 
 // watchPolicyReload は SIGHUP を監視し、ポリシーファイルを再読み込みして

@@ -11,9 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yuyamorita/mcpgw/internal/audit"
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/audit"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // エンドツーエンドテスト: cat を子プロセスとして使い、

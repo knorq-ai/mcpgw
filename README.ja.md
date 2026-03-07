@@ -16,7 +16,7 @@ MCP は AI エージェントに外部ツール呼び出しを提供するが、
 ## Quick Start
 
 ```bash
-go install github.com/yuyamorita/mcpgw@latest
+go install github.com/knorq-ai/mcpgw@latest
 
 # HTTP proxy モード
 mcpgw proxy --upstream http://localhost:8080 --policy policy.yaml

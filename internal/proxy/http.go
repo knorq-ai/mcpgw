@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
-	"github.com/yuyamorita/mcpgw/internal/metrics"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/metrics"
 )
 
 // maxBodySize はリクエスト/レスポンスボディの最大サイズ（10MB）。

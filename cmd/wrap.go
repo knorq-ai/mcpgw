@@ -10,11 +10,11 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/yuyamorita/mcpgw/internal/audit"
-	"github.com/yuyamorita/mcpgw/internal/config"
-	"github.com/yuyamorita/mcpgw/internal/intercept"
-	"github.com/yuyamorita/mcpgw/internal/policy"
-	"github.com/yuyamorita/mcpgw/internal/proxy"
+	"github.com/knorq-ai/mcpgw/internal/audit"
+	"github.com/knorq-ai/mcpgw/internal/config"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/policy"
+	"github.com/knorq-ai/mcpgw/internal/proxy"
 )
 
 var (

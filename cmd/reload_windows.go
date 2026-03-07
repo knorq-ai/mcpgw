@@ -5,7 +5,7 @@ package cmd
 import (
 	"context"
 
-	"github.com/yuyamorita/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/intercept"
 )
 
 // watchPolicyReload は Windows では no-op。SIGHUP が存在しないため。

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/yuyamorita/mcpgw/internal/policy"
+	"github.com/knorq-ai/mcpgw/internal/policy"
 )
 
 var policyCmd = &cobra.Command{

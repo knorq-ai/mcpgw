@@ -27,8 +27,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yuyamorita/mcpgw/internal/audit"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/audit"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 // TestMain はテスト実行前にバイナリをビルドし、テスト後に削除する。

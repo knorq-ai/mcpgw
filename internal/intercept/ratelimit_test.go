@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yuyamorita/mcpgw/internal/auth"
-	"github.com/yuyamorita/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/auth"
+	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
 func newTestMsg() *jsonrpc.Message {

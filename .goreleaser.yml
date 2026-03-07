@@ -5,7 +5,7 @@ builds:
     binary: mcpgw
     ldflags:
       - -s -w
-      - -X github.com/yuyamorita/mcpgw/cmd.Version={{ .Version }}
+      - -X github.com/knorq-ai/mcpgw/cmd.Version={{ .Version }}
     goos:
       - linux
       - darwin

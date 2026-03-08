@@ -356,7 +356,7 @@ func startProxy(t *testing.T, args []string) (*exec.Cmd, string) {
 	listenAddr := getFreePort(t)
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = io.Discard
+
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
@@ -696,7 +696,7 @@ listen: ":0"
 	listenAddr := getFreePort(t)
 	fullArgs := []string{"proxy", "--config", cfgPath, "--listen", listenAddr}
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = io.Discard
+
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
@@ -816,7 +816,7 @@ func startProxyTLS(t *testing.T, args []string) (*exec.Cmd, string) {
 	listenAddr := getFreePort(t)
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = io.Discard
+
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
@@ -1997,7 +1997,7 @@ func startRealMCPServer(t *testing.T) string {
 
 	cmd := exec.Command(npx, "-y", "@modelcontextprotocol/server-everything", "streamableHttp")
 	cmd.Env = append(os.Environ(), "PORT="+port)
-	cmd.Stderr = io.Discard
+
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
@@ -2561,7 +2561,7 @@ func TestE2EProxyGracefulShutdown(t *testing.T) {
 
 	listenAddr := getFreePort(t)
 	cmd := exec.Command(binaryPath, "proxy", "--listen", listenAddr, "--upstream", upstream.URL)
-	cmd.Stderr = io.Discard
+
 	require.NoError(t, cmd.Start())
 
 	waitForTCP(t, listenAddr, 5*time.Second)

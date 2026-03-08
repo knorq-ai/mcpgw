@@ -357,11 +357,18 @@ func startProxy(t *testing.T, args []string) (*exec.Cmd, string) {
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 	cmd.Stderr = os.Stderr
+	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
 		cmd.Process.Signal(os.Interrupt)
-		cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+		}
 	})
 
 	waitForTCP(t, listenAddr, 5*time.Second)
@@ -690,11 +697,18 @@ listen: ":0"
 	fullArgs := []string{"proxy", "--config", cfgPath, "--listen", listenAddr}
 	cmd := exec.Command(binaryPath, fullArgs...)
 	cmd.Stderr = os.Stderr
+	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
 		cmd.Process.Signal(os.Interrupt)
-		cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+		}
 	})
 
 	waitForTCP(t, listenAddr, 5*time.Second)
@@ -803,11 +817,18 @@ func startProxyTLS(t *testing.T, args []string) (*exec.Cmd, string) {
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
 	cmd.Stderr = os.Stderr
+	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
 		cmd.Process.Signal(os.Interrupt)
-		cmd.Wait()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+		}
 	})
 
 	waitForTLS(t, listenAddr, 5*time.Second)
@@ -2540,6 +2561,7 @@ func TestE2EProxyGracefulShutdown(t *testing.T) {
 	listenAddr := getFreePort(t)
 	cmd := exec.Command(binaryPath, "proxy", "--listen", listenAddr, "--upstream", upstream.URL)
 	cmd.Stderr = os.Stderr
+	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
 	waitForTCP(t, listenAddr, 5*time.Second)

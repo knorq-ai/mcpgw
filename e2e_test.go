@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -356,7 +357,8 @@ func startProxy(t *testing.T, args []string) (*exec.Cmd, string) {
 	listenAddr := getFreePort(t)
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
@@ -368,6 +370,9 @@ func startProxy(t *testing.T, args []string) (*exec.Cmd, string) {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			cmd.Process.Kill()
+		}
+		if stderr.Len() > 0 {
+			t.Logf("proxy stderr:\n%s", stderr.String())
 		}
 	})
 
@@ -696,7 +701,8 @@ listen: ":0"
 	listenAddr := getFreePort(t)
 	fullArgs := []string{"proxy", "--config", cfgPath, "--listen", listenAddr}
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
@@ -708,6 +714,9 @@ listen: ":0"
 		case <-done:
 		case <-time.After(5 * time.Second):
 			cmd.Process.Kill()
+		}
+		if stderr.Len() > 0 {
+			t.Logf("proxy stderr:\n%s", stderr.String())
 		}
 	})
 
@@ -816,7 +825,8 @@ func startProxyTLS(t *testing.T, args []string) (*exec.Cmd, string) {
 	listenAddr := getFreePort(t)
 	fullArgs := append([]string{"proxy", "--listen", listenAddr}, args...)
 	cmd := exec.Command(binaryPath, fullArgs...)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
@@ -828,6 +838,9 @@ func startProxyTLS(t *testing.T, args []string) (*exec.Cmd, string) {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			cmd.Process.Kill()
+		}
+		if stderr.Len() > 0 {
+			t.Logf("proxy stderr:\n%s", stderr.String())
 		}
 	})
 
@@ -1997,7 +2010,9 @@ func startRealMCPServer(t *testing.T) string {
 
 	cmd := exec.Command(npx, "-y", "@modelcontextprotocol/server-everything", "streamableHttp")
 	cmd.Env = append(os.Environ(), "PORT="+port)
-	cmd.Stderr = os.Stderr
+	var mcpStderr bytes.Buffer
+	cmd.Stderr = &mcpStderr
+	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 
 	t.Cleanup(func() {
@@ -2008,6 +2023,9 @@ func startRealMCPServer(t *testing.T) string {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			cmd.Process.Kill()
+		}
+		if mcpStderr.Len() > 0 {
+			t.Logf("mcp server stderr:\n%s", mcpStderr.String())
 		}
 	})
 
@@ -2560,7 +2578,8 @@ func TestE2EProxyGracefulShutdown(t *testing.T) {
 
 	listenAddr := getFreePort(t)
 	cmd := exec.Command(binaryPath, "proxy", "--listen", listenAddr, "--upstream", upstream.URL)
-	cmd.Stderr = os.Stderr
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second
 	require.NoError(t, cmd.Start())
 

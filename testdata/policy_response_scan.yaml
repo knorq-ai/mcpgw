@@ -1,0 +1,19 @@
+version: v1
+mode: enforce
+
+response_patterns:
+  - "(?i)api[_-]?key\\s*[:=]"
+  - "(?i)password\\s*[:=]"
+  - "(?i)secret\\s*[:=]"
+
+allowed_tools:
+  - "read_*"
+  - "write_*"
+  - "list_*"
+  - "search_*"
+
+rules:
+  - name: allow-all
+    match:
+      methods: ["*"]
+    action: allow

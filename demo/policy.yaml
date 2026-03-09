@@ -1,0 +1,68 @@
+version: v1
+mode: enforce
+rules:
+  # ---- ハンドシェイク・通知を許可 ----
+  - name: allow-handshake
+    match:
+      methods: ["initialize", "notifications/*"]
+    action: allow
+
+  # ---- ディスカバリを許可 ----
+  - name: allow-discovery
+    match:
+      methods: ["tools/list", "resources/list", "prompts/list"]
+    action: allow
+
+  # ---- 危険コマンドをブロック（安全なコマンドは通過） ----
+  - name: block-dangerous-commands
+    match:
+      methods: ["tools/call"]
+      tools: ["exec_command"]
+      arguments:
+        command: ["*rm *", "*sudo*", "*chmod*", "*cat /etc/*"]
+    action: deny
+
+  # ---- 機密ファイルのみブロック（安全パスは通過） ----
+  - name: block-sensitive-reads
+    match:
+      methods: ["tools/call"]
+      tools: ["read_file"]
+      arguments:
+        path: ["/etc/*", "*.env", "*.pem", "*/.ssh/*"]
+    action: deny
+
+  # ---- 環境変数漏洩をブロック ----
+  - name: block-env-leak
+    match:
+      methods: ["tools/call"]
+      tools: ["get_env", "list_env"]
+    action: deny
+
+  # ---- 危険 SQL のみブロック（SELECT は通過） ----
+  - name: block-dangerous-sql
+    match:
+      methods: ["tools/call"]
+      tools: ["sql_query"]
+      arguments:
+        query: ["*DROP*", "*DELETE*", "*UNION*"]
+    action: deny
+
+  # ---- メール悪用をブロック ----
+  - name: block-email-abuse
+    match:
+      methods: ["tools/call"]
+      tools: ["send_email", "send_*"]
+    action: deny
+
+  # ---- 安全なツールを許可 ----
+  - name: allow-safe-tools
+    match:
+      methods: ["tools/call"]
+      tools: ["echo", "get_weather", "calculate", "read_file", "exec_command", "sql_query"]
+    action: allow
+
+  # ---- デフォルト拒否 ----
+  - name: deny-all
+    match:
+      methods: ["*"]
+    action: deny

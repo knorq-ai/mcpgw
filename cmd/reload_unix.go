@@ -9,14 +9,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/knorq-ai/mcpgw/internal/intercept"
 	"github.com/knorq-ai/mcpgw/internal/policy"
 )
 
+// EngineSwapper はポリシーエンジンをアトミックに入れ替えるインターフェース。
+type EngineSwapper interface {
+	SwapEngine(e *policy.Engine)
+}
+
 // watchPolicyReload は SIGHUP を監視し、ポリシーファイルを再読み込みして
-// PolicyInterceptor のエンジンをアトミックに入れ替える。
-func watchPolicyReload(ctx context.Context, policyPath string, pi *intercept.PolicyInterceptor) {
-	if policyPath == "" || pi == nil {
+// 全 EngineSwapper のエンジンをアトミックに入れ替える。
+func watchPolicyReload(ctx context.Context, policyPath string, swappers ...EngineSwapper) {
+	if policyPath == "" || len(swappers) == 0 {
 		return
 	}
 	ch := make(chan os.Signal, 1)
@@ -34,7 +38,9 @@ func watchPolicyReload(ctx context.Context, policyPath string, pi *intercept.Pol
 					continue
 				}
 				engine := policy.NewEngine(pf)
-				pi.SwapEngine(engine)
+				for _, s := range swappers {
+					s.SwapEngine(engine)
+				}
 				slog.Info("policy reloaded", "rules", len(pf.Rules))
 			}
 		}

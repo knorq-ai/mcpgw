@@ -158,8 +158,14 @@ func (p *StdioProxy) pump(ctx context.Context, src io.Reader, dst io.Writer, err
 			continue
 		}
 
-		// 通過 — 生バイトをそのまま転送
-		if err := jsonrpc.EncodeRaw(dst, raw); err != nil {
+		// ActionRedact の場合はリダクション済みボディを転送する
+		forwardRaw := raw
+		if result.Action == intercept.ActionRedact && result.RedactedBody != nil {
+			forwardRaw = result.RedactedBody
+		}
+
+		// 通過 — 生バイト（またはリダクション済みバイト）を転送
+		if err := jsonrpc.EncodeRaw(dst, forwardRaw); err != nil {
 			return fmt.Errorf("mcpgw: write %s: %w", dir, err)
 		}
 	}

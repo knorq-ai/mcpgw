@@ -18,3 +18,11 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Demo
+demo/server/demo-server
+demo/audit.jsonl
+
+# Frontend
+web/node_modules/
+web/dist/assets/

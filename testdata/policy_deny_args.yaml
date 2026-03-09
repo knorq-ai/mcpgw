@@ -1,0 +1,23 @@
+version: v1
+mode: enforce
+rules:
+  - name: block-sensitive-reads
+    match:
+      methods: ["tools/call"]
+      tools: ["read_file"]
+      arguments:
+        path: ["/etc/*", "*.env", "*.pem", "*/.ssh/*"]
+    action: deny
+
+  - name: block-dangerous-commands
+    match:
+      methods: ["tools/call"]
+      tools: ["exec_command"]
+      arguments:
+        command: ["*rm *", "*sudo*", "*chmod*", "*cat /etc/*"]
+    action: deny
+
+  - name: allow-all
+    match:
+      methods: ["*"]
+    action: allow

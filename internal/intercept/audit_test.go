@@ -145,6 +145,28 @@ func TestAuditLoggerRecordsRequestID(t *testing.T) {
 	assert.Equal(t, "test-req-id-123", entries[0].RequestID)
 }
 
+func TestAuditLoggerRedactMessage(t *testing.T) {
+	al, path := newTestAuditLogger(t)
+
+	msg := &jsonrpc.Message{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`3`),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"send_payment"}`),
+	}
+	result := Result{
+		Action:       ActionRedact,
+		Reason:       "PII redacted: credit_card",
+		RedactedBody: []byte(`{"redacted":true}`),
+	}
+	al.Log(context.Background(), DirClientToServer, msg, []byte(`raw`), result)
+
+	entries := readAuditEntries(t, path)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "redact", entries[0].Action)
+	assert.Contains(t, entries[0].Reason, "PII redacted")
+}
+
 func TestKindString(t *testing.T) {
 	assert.Equal(t, "request", kindString(jsonrpc.KindRequest))
 	assert.Equal(t, "response", kindString(jsonrpc.KindResponse))

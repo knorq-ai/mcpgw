@@ -7,6 +7,7 @@ type Identity struct {
 	Subject string         `json:"sub"`
 	Method  string         `json:"method"` // "jwt" or "apikey"
 	Claims  map[string]any `json:"claims,omitempty"`
+	Roles   []string       `json:"roles,omitempty"` // JWT claims から抽出されたロール
 }
 
 type contextKey struct{}

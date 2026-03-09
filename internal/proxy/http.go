@@ -18,6 +18,7 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/intercept"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 	"github.com/knorq-ai/mcpgw/internal/metrics"
+	"github.com/knorq-ai/mcpgw/internal/routing"
 )
 
 // maxBodySize はリクエスト/レスポンスボディの最大サイズ（10MB）。
@@ -42,6 +43,7 @@ const maxBatchSize = 100
 // HTTPProxyConfig は HTTPProxy の設定。
 type HTTPProxyConfig struct {
 	Upstream            string
+	Router              *routing.Router // nil の場合は Upstream を使用
 	Chain               *intercept.Chain
 	Audit               *intercept.AuditLogger
 	SessionTTL          time.Duration
@@ -50,6 +52,7 @@ type HTTPProxyConfig struct {
 	IdleConnTimeout     time.Duration
 	RequestTimeout      time.Duration
 	SSEIdleTimeout      time.Duration
+	DrainTimeout        time.Duration
 	CircuitBreaker      CircuitBreakerConfig
 }
 
@@ -63,15 +66,20 @@ type CircuitBreakerConfig struct {
 // POST/GET/DELETE を単一エンドポイントで処理し、interceptor chain と audit logger を適用する。
 type HTTPProxy struct {
 	upstream       string
+	router         *routing.Router     // ツール名ベースのルーティング（nil = 単一 upstream）
 	chain          *intercept.Chain
 	audit          *intercept.AuditLogger
-	client         *http.Client // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
+	client         *http.Client        // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
 	mu             sync.Mutex
 	sessions       map[string]time.Time // sid → 最終アクセス時刻
 	ttl            time.Duration
 	requestTimeout time.Duration
 	sseIdleTimeout time.Duration
-	cb             *circuitBreaker
+	drainTimeout   time.Duration
+	draining       atomic.Bool          // drain フェーズ中フラグ
+	drainWg        sync.WaitGroup       // アクティブな SSE ストリーム数を追跡
+	cbs            map[string]*circuitBreaker // upstream URL → サーキットブレーカー
+	cb             *circuitBreaker      // デフォルト CB（後方互換）
 	readyClient    *http.Client                  // readiness probe 専用（本番接続プールと分離）
 	readySnap      atomic.Pointer[readySnapshot] // UpstreamReady キャッシュ
 	readyMu        sync.Mutex                    // UpstreamReady の同時 HEAD リクエストを防止
@@ -106,13 +114,31 @@ func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 		sseIdleTimeout = 5 * time.Minute
 	}
 
-	var cb *circuitBreaker
+	drainTimeout := cfg.DrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = 30 * time.Second
+	}
+
+	// サーキットブレーカーの構築（per-upstream）
+	var defaultCB *circuitBreaker
+	cbs := make(map[string]*circuitBreaker)
 	if cfg.CircuitBreaker.MaxFailures > 0 {
-		cb = newCircuitBreaker(cfg.CircuitBreaker.MaxFailures, cfg.CircuitBreaker.Timeout)
+		defaultCB = newCircuitBreaker(cfg.CircuitBreaker.MaxFailures, cfg.CircuitBreaker.Timeout)
+		upstreamURL := strings.TrimRight(cfg.Upstream, "/")
+		cbs[upstreamURL] = defaultCB
+		// Router が設定されている場合、各 upstream 用の CB も作成
+		if cfg.Router != nil {
+			for _, u := range cfg.Router.Upstreams() {
+				if _, ok := cbs[u]; !ok {
+					cbs[u] = newCircuitBreaker(cfg.CircuitBreaker.MaxFailures, cfg.CircuitBreaker.Timeout)
+				}
+			}
+		}
 	}
 
 	p := &HTTPProxy{
 		upstream: strings.TrimRight(cfg.Upstream, "/"),
+		router:   cfg.Router,
 		chain:    cfg.Chain,
 		audit:    cfg.Audit,
 		client: &http.Client{
@@ -127,7 +153,9 @@ func NewHTTPProxy(cfg HTTPProxyConfig) *HTTPProxy {
 		ttl:            sessionTTL,
 		requestTimeout: requestTimeout,
 		sseIdleTimeout: sseIdleTimeout,
-		cb:             cb,
+		drainTimeout:   drainTimeout,
+		cbs:            cbs,
+		cb:             defaultCB,
 		readyClient: &http.Client{
 			Timeout: 2 * time.Second,
 			Transport: &http.Transport{
@@ -152,10 +180,54 @@ func (p *HTTPProxy) Close() {
 	<-p.stopped
 }
 
+// resolveUpstream はメソッドとパラメータから転送先 upstream を決定する。
+func (p *HTTPProxy) resolveUpstream(method string, params json.RawMessage) string {
+	if p.router != nil {
+		return p.router.Resolve(method, params)
+	}
+	return p.upstream
+}
+
+// cbFor は指定 upstream URL に対応するサーキットブレーカーを返す。
+// URL のスキーム+ホスト部分でマッチングする。
+func (p *HTTPProxy) cbFor(upstreamURL string) *circuitBreaker {
+	// 末尾スラッシュやパスを除去してベース URL でマッチ
+	base := strings.TrimRight(upstreamURL, "/")
+	if cb, ok := p.cbs[base]; ok {
+		return cb
+	}
+	return p.cb
+}
+
+// Draining は drain 中かどうかを返す。
+func (p *HTTPProxy) Draining() bool {
+	return p.draining.Load()
+}
+
+// Drain は drain フェーズを開始し、既存の SSE ストリームの完了を待つ。
+// drainTimeout を超過した場合はタイムアウトして戻る。
+func (p *HTTPProxy) Drain() {
+	p.draining.Store(true)
+	slog.Info("drain started, waiting for active streams", "timeout", p.drainTimeout)
+	done := make(chan struct{})
+	go func() {
+		p.drainWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		slog.Info("drain complete, all streams finished")
+	case <-time.After(p.drainTimeout):
+		slog.Warn("drain timeout exceeded, proceeding with shutdown")
+	}
+}
+
 // doUpstream はサーキットブレーカーを経由して upstream にリクエストを送信する。
 // 失敗時はエラーレスポンスをクライアントに書き込み nil を返す。
 func (p *HTTPProxy) doUpstream(w http.ResponseWriter, req *http.Request) *http.Response {
-	allowed, state := p.cb.Allow()
+	upBase := req.URL.Scheme + "://" + req.URL.Host
+	cb := p.cbFor(upBase)
+	allowed, state := cb.Allow()
 	if !allowed {
 		if state == stateOpen {
 			metrics.CircuitBreakerTrips.Inc()
@@ -167,13 +239,13 @@ func (p *HTTPProxy) doUpstream(w http.ResponseWriter, req *http.Request) *http.R
 	if err != nil {
 		// クライアント切断による失敗は upstream 障害としてカウントしない
 		if req.Context().Err() == nil {
-			p.cb.RecordFailure()
+			cb.RecordFailure()
 			metrics.UpstreamErrors.Inc()
 		}
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return nil
 	}
-	p.cb.RecordSuccess()
+	cb.RecordSuccess()
 	return resp
 }
 
@@ -222,6 +294,23 @@ func (p *HTTPProxy) UpstreamReady() bool {
 	resp.Body.Close()
 	p.readySnap.Store(&readySnapshot{ready: true, at: time.Now()})
 	return true
+}
+
+// ActiveSessionCount はアクティブセッション数を返す。
+func (p *HTTPProxy) ActiveSessionCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.sessions)
+}
+
+// Upstream は upstream URL を返す。
+func (p *HTTPProxy) Upstream() string {
+	return p.upstream
+}
+
+// CircuitBreakerState はサーキットブレーカーの現在状態を文字列で返す。
+func (p *HTTPProxy) CircuitBreakerState() string {
+	return p.cb.State()
 }
 
 // cleanupLoop は 1 分間隔で TTL 超過セッションを削除する。
@@ -276,6 +365,12 @@ func isValidRequestID(id string) bool {
 
 // ServeHTTP は HTTP リクエストをメソッドに応じて振り分ける。
 func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// drain 中は新規リクエストを拒否
+	if p.draining.Load() {
+		http.Error(w, "Service Unavailable (draining)", http.StatusServiceUnavailable)
+		return
+	}
+
 	start := time.Now()
 
 	// リクエスト ID の取得または生成
@@ -357,12 +452,22 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ActionRedact の場合はリダクション済みボディを使用する
+	if result.Action == intercept.ActionRedact && result.RedactedBody != nil {
+		action = "redact"
+		body = result.RedactedBody
+	}
+
 	metrics.RequestsTotal.WithLabelValues(method, action).Inc()
 
-	// upstream に転送
+	// upstream に転送（ルーティング解決）
 	// POST は SSE レスポンスの可能性があるため context timeout は使わず、
 	// Transport.ResponseHeaderTimeout でヘッダ応答のタイムアウトを制御する。
-	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, p.upstream, bytes.NewReader(body))
+	targetUpstream := p.resolveUpstream(method, nil)
+	if parsed != nil {
+		targetUpstream = p.resolveUpstream(parsed.Method, parsed.Params)
+	}
+	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetUpstream, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -438,6 +543,11 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ActionRedact の場合はリダクション済みボディを使用する
+	if respResult.Action == intercept.ActionRedact && respResult.RedactedBody != nil {
+		respBody = respResult.RedactedBody
+	}
+
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(resp.StatusCode)
 	w.Write(respBody)
@@ -489,8 +599,14 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 			}
 			// 通知のブロックはサイレントドロップ
 		} else {
-			metrics.RequestsTotal.WithLabelValues(method, "pass").Inc()
-			passMessages = append(passMessages, raw)
+			action := "pass"
+			forwardRaw := raw
+			if result.Action == intercept.ActionRedact && result.RedactedBody != nil {
+				action = "redact"
+				forwardRaw = json.RawMessage(result.RedactedBody)
+			}
+			metrics.RequestsTotal.WithLabelValues(method, action).Inc()
+			passMessages = append(passMessages, forwardRaw)
 		}
 	}
 
@@ -592,6 +708,8 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 				errResp := buildErrorResponse(parsed.ID, -32603, "blocked by policy")
 				processedResponses = append(processedResponses, mustMarshalMessage(errResp))
 			}
+		} else if result.Action == intercept.ActionRedact && result.RedactedBody != nil {
+			processedResponses = append(processedResponses, json.RawMessage(result.RedactedBody))
 		} else {
 			processedResponses = append(processedResponses, raw)
 		}
@@ -625,6 +743,9 @@ func marshalBatchResponse(responses []json.RawMessage) []byte {
 // 呼び出し元の defer resp.Body.Close() により body が閉じられ、
 // Read がエラーを返してスキャナ goroutine は終了する。
 func (p *HTTPProxy) streamSSE(ctx context.Context, w http.ResponseWriter, body io.ReadCloser) {
+	p.drainWg.Add(1)
+	defer p.drainWg.Done()
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
@@ -690,6 +811,11 @@ func (p *HTTPProxy) streamSSE(ctx context.Context, w http.ResponseWriter, body i
 			if result.Action == intercept.ActionBlock {
 				slog.Warn("SSE event blocked", "reason", result.Reason)
 				continue
+			}
+
+			// ActionRedact の場合はリダクション済みデータで SSE イベントを書き換える
+			if result.Action == intercept.ActionRedact && result.RedactedBody != nil {
+				ev = &SSEEvent{ID: ev.ID, Event: ev.Event, Data: string(result.RedactedBody)}
 			}
 
 			formatted := FormatSSEEvent(ev)

@@ -1,0 +1,14 @@
+upstream: "http://localhost:${DEMO_BACKEND_PORT}"
+listen: ":${DEMO_PROXY_PORT}"
+policy: demo/policy.yaml
+audit_log: demo/audit.jsonl
+metrics:
+  addr: ":${DEMO_MGMT_PORT}"
+rate_limit:
+  requests_per_second: 20
+  burst: 30
+circuit_breaker:
+  max_failures: 5
+  timeout: "30s"
+session:
+  ttl: "10m"

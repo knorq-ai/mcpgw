@@ -1,0 +1,18 @@
+version: v1
+mode: enforce
+rules:
+  - name: admin-only-exec
+    match:
+      methods: ["tools/call"]
+      tools: ["exec_*"]
+      roles: ["admin", "ops-*"]
+    action: allow
+  - name: deny-exec
+    match:
+      methods: ["tools/call"]
+      tools: ["exec_*"]
+    action: deny
+  - name: default-allow
+    match:
+      methods: ["*"]
+    action: allow

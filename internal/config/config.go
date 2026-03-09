@@ -14,6 +14,7 @@ type Config struct {
 	Listen    string          `yaml:"listen"`
 	Policy    string          `yaml:"policy"`
 	AuditLog  string          `yaml:"audit_log"`
+	Routes         []RouteConfig        `yaml:"routes,omitempty"`
 	Auth           AuthConfig           `yaml:"auth"`
 	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
 	Session        SessionConfig        `yaml:"session"`
@@ -23,6 +24,22 @@ type Config struct {
 	CORS           CORSConfig           `yaml:"cors"`
 	Transport      TransportConfig      `yaml:"transport"`
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+	ToolRateLimit  ToolRateLimitConfig  `yaml:"tool_rate_limit"`
+	Alerting       AlertingConfig       `yaml:"alerting"`
+	DrainTimeout   string               `yaml:"drain_timeout,omitempty"`
+	Plugins        []PluginConfig       `yaml:"plugins,omitempty"`
+}
+
+// RouteConfig はツールベースのルーティングルール。
+type RouteConfig struct {
+	MatchTools []string `yaml:"match_tools"`
+	Upstream   string   `yaml:"upstream"`
+}
+
+// PluginConfig はプラグインの設定。
+type PluginConfig struct {
+	Name   string         `yaml:"name"`
+	Config map[string]any `yaml:"config,omitempty"`
 }
 
 // LoggingConfig はログ出力の設定。
@@ -64,15 +81,25 @@ type TLSConfig struct {
 
 // AuthConfig は認証関連の設定。
 type AuthConfig struct {
-	JWT     JWTAuthConfig  `yaml:"jwt"`
-	APIKeys []APIKeyConfig `yaml:"api_keys"`
+	JWT     JWTAuthConfig   `yaml:"jwt"`
+	APIKeys []APIKeyConfig  `yaml:"api_keys"`
+	OAuth   OAuthAuthConfig `yaml:"oauth,omitempty"`
+}
+
+// OAuthAuthConfig は OAuth 2.1 / JWKS 認証の設定。
+type OAuthAuthConfig struct {
+	JWKSURL     string `yaml:"jwks_url"`
+	Issuer      string `yaml:"issuer"`
+	Audience    string `yaml:"audience,omitempty"`
+	ResourceURL string `yaml:"resource_url,omitempty"`
 }
 
 // JWTAuthConfig は JWT 認証の設定。
 type JWTAuthConfig struct {
-	Algorithm string `yaml:"algorithm"`
-	Secret    string `yaml:"secret"`
+	Algorithm  string `yaml:"algorithm"`
+	Secret     string `yaml:"secret"`
 	PubkeyFile string `yaml:"pubkey_file"`
+	RolesClaim string `yaml:"roles_claim,omitempty"` // ロール抽出元の JWT claim 名（デフォルト: "roles"）
 }
 
 // APIKeyConfig は API キーの設定。
@@ -85,6 +112,18 @@ type APIKeyConfig struct {
 type RateLimitConfig struct {
 	RequestsPerSecond float64 `yaml:"requests_per_second"`
 	Burst             int     `yaml:"burst"`
+}
+
+// ToolRateLimitConfig はツール単位のレート制限設定。
+type ToolRateLimitConfig struct {
+	RequestsPerMinute float64 `yaml:"requests_per_minute"`
+	Burst             int     `yaml:"burst"`
+}
+
+// AlertingConfig はアラート通知の設定。
+type AlertingConfig struct {
+	WebhookURL  string `yaml:"webhook_url"`
+	DedupWindow string `yaml:"dedup_window"` // time.ParseDuration 形式（例: "5m"）
 }
 
 // SessionConfig はセッション関連の設定。

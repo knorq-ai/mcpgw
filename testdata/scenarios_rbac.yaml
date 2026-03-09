@@ -1,0 +1,22 @@
+scenarios:
+  - name: "admin can exec"
+    method: "tools/call"
+    params: '{"name":"exec_cmd"}'
+    subject: "admin-alice"
+    roles: ["admin"]
+    expect: allow
+  - name: "user cannot exec"
+    method: "tools/call"
+    params: '{"name":"exec_cmd"}'
+    subject: "user-bob"
+    expect: deny
+  - name: "anyone can read"
+    method: "tools/call"
+    params: '{"name":"read_file"}'
+    subject: "user-bob"
+    expect: allow
+  - name: "tools/list is allowed"
+    method: "tools/list"
+    params: ""
+    subject: ""
+    expect: allow

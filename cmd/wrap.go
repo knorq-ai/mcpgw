@@ -13,6 +13,7 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/config"
 	"github.com/knorq-ai/mcpgw/internal/intercept"
+	"github.com/knorq-ai/mcpgw/internal/plugin"
 	"github.com/knorq-ai/mcpgw/internal/policy"
 	"github.com/knorq-ai/mcpgw/internal/proxy"
 )
@@ -73,6 +74,26 @@ func runWrap(cmd *cobra.Command, args []string) error {
 		interceptors = append(interceptors, policyInterceptor)
 		slog.Info("policy loaded", "rules", len(pf.Rules), "mode", pf.Mode)
 	}
+
+	// プラグインの読み込み
+	if len(cfg.Plugins) > 0 {
+		registry := plugin.NewRegistry()
+		plugin.RegisterBuiltins(registry)
+		plugins, pluginErr := plugin.LoadPlugins(registry, cfg.Plugins)
+		if pluginErr != nil {
+			return fmt.Errorf("mcpgw: %w", pluginErr)
+		}
+		for _, pl := range plugins {
+			interceptors = append(interceptors, pl)
+			slog.Info("plugin loaded", "name", pl.Name())
+		}
+		defer func() {
+			for _, pl := range plugins {
+				pl.Close()
+			}
+		}()
+	}
+
 	chain := intercept.NewChain(interceptors...)
 
 	// SIGHUP によるポリシーホットリロード

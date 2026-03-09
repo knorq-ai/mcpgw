@@ -70,6 +70,27 @@ func (cb *circuitBreaker) RecordSuccess() {
 	cb.state = stateClosed
 }
 
+// State はサーキットブレーカーの現在状態を文字列で返す。
+// nil レシーバ安全: nil の場合は "disabled" を返す。
+func (cb *circuitBreaker) State() string {
+	if cb == nil {
+		return "disabled"
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	switch cb.state {
+	case stateClosed:
+		return "closed"
+	case stateOpen:
+		return "open"
+	case stateHalfOpen:
+		return "half-open"
+	default:
+		return "closed"
+	}
+}
+
 // RecordFailure は失敗を記録する。
 func (cb *circuitBreaker) RecordFailure() {
 	if cb == nil {

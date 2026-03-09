@@ -9,10 +9,14 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 )
 
-type passInterceptor struct{ called bool }
+type passInterceptor struct {
+	called      bool
+	receivedRaw []byte
+}
 
-func (p *passInterceptor) Intercept(_ context.Context, _ Direction, _ *jsonrpc.Message, _ []byte) Result {
+func (p *passInterceptor) Intercept(_ context.Context, _ Direction, _ *jsonrpc.Message, raw []byte) Result {
 	p.called = true
+	p.receivedRaw = raw
 	return Result{Action: ActionPass}
 }
 
@@ -21,6 +25,17 @@ type blockInterceptor struct{ called bool }
 func (b *blockInterceptor) Intercept(_ context.Context, _ Direction, _ *jsonrpc.Message, _ []byte) Result {
 	b.called = true
 	return Result{Action: ActionBlock, Reason: "blocked by test"}
+}
+
+type redactInterceptor struct {
+	called      bool
+	receivedRaw []byte
+}
+
+func (r *redactInterceptor) Intercept(_ context.Context, _ Direction, _ *jsonrpc.Message, raw []byte) Result {
+	r.called = true
+	r.receivedRaw = raw
+	return Result{Action: ActionRedact, RedactedBody: []byte("redacted-body")}
 }
 
 func TestChainAllPass(t *testing.T) {
@@ -56,6 +71,36 @@ func TestChainEmpty(t *testing.T) {
 	chain := NewChain()
 	result := chain.Process(context.Background(), DirClientToServer, nil, nil)
 	assert.Equal(t, ActionPass, result.Action)
+}
+
+func TestChainRedactContinuesChain(t *testing.T) {
+	r := &redactInterceptor{}
+	p := &passInterceptor{}
+	chain := NewChain(r, p)
+
+	msg := &jsonrpc.Message{JSONRPC: "2.0", Method: "test"}
+	result := chain.Process(context.Background(), DirClientToServer, msg, []byte("original"))
+
+	assert.Equal(t, ActionRedact, result.Action)
+	assert.Equal(t, []byte("redacted-body"), result.RedactedBody)
+	assert.True(t, r.called)
+	assert.True(t, p.called) // ActionRedact はチェーンを継続する
+	// 後続の Interceptor にはリダクション済みボディが渡される
+	assert.Equal(t, []byte("redacted-body"), p.receivedRaw)
+}
+
+func TestChainRedactThenBlock(t *testing.T) {
+	r := &redactInterceptor{}
+	b := &blockInterceptor{}
+	chain := NewChain(r, b)
+
+	msg := &jsonrpc.Message{JSONRPC: "2.0", Method: "test"}
+	result := chain.Process(context.Background(), DirClientToServer, msg, []byte("original"))
+
+	// ActionBlock が最終結果になる（短絡）
+	assert.Equal(t, ActionBlock, result.Action)
+	assert.True(t, r.called)
+	assert.True(t, b.called)
 }
 
 func TestDirectionString(t *testing.T) {

@@ -21,13 +21,18 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
+	alertpkg "github.com/knorq-ai/mcpgw/internal/alert"
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/auth"
 	"github.com/knorq-ai/mcpgw/internal/config"
+	"github.com/knorq-ai/mcpgw/internal/dashboard"
 	"github.com/knorq-ai/mcpgw/internal/intercept"
 	"github.com/knorq-ai/mcpgw/internal/metrics"
+	"github.com/knorq-ai/mcpgw/internal/plugin"
 	"github.com/knorq-ai/mcpgw/internal/policy"
 	"github.com/knorq-ai/mcpgw/internal/proxy"
+	"github.com/knorq-ai/mcpgw/internal/routing"
+	"github.com/knorq-ai/mcpgw/internal/telemetry"
 )
 
 var (
@@ -98,6 +103,33 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mcpgw: %w", err)
 	}
 
+	// ルーティング設定のバリデーション
+	for i, rc := range cfg.Routes {
+		if len(rc.MatchTools) == 0 {
+			return fmt.Errorf("mcpgw: routes[%d]: match_tools is required", i)
+		}
+		if rc.Upstream == "" {
+			return fmt.Errorf("mcpgw: routes[%d]: upstream is required", i)
+		}
+		u, err := url.Parse(rc.Upstream)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("mcpgw: routes[%d]: invalid upstream URL %q", i, rc.Upstream)
+		}
+	}
+
+	// プラグイン名のバリデーション
+	if len(cfg.Plugins) > 0 {
+		validPlugins := map[string]bool{"pii": true, "injection": true, "schema": true}
+		for i, pc := range cfg.Plugins {
+			if pc.Name == "" {
+				return fmt.Errorf("mcpgw: plugins[%d]: name is required", i)
+			}
+			if !validPlugins[pc.Name] {
+				return fmt.Errorf("mcpgw: plugins[%d]: unknown plugin %q (available: pii, injection, schema)", i, pc.Name)
+			}
+		}
+	}
+
 	// 監査ログ
 	logger, err := audit.NewLogger(proxyAuditLogPath, audit.DefaultMaxSize)
 	if err != nil {
@@ -122,8 +154,24 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		slog.Info("rate limit enabled", "rps", cfg.RateLimit.RequestsPerSecond, "burst", burst)
 	}
 
+	// ツール単位レート制限
+	if cfg.ToolRateLimit.RequestsPerMinute > 0 {
+		burst := cfg.ToolRateLimit.Burst
+		if burst <= 0 {
+			burst = int(cfg.ToolRateLimit.RequestsPerMinute / 60.0)
+			if burst < 1 {
+				burst = 1
+			}
+		}
+		trl := intercept.NewToolRateLimitInterceptor(cfg.ToolRateLimit.RequestsPerMinute, burst)
+		defer trl.Close()
+		interceptors = append(interceptors, trl)
+		slog.Info("tool rate limit enabled", "rpm", cfg.ToolRateLimit.RequestsPerMinute, "burst", burst)
+	}
+
 	// ポリシー
 	var policyInterceptor *intercept.PolicyInterceptor
+	var responseInterceptor *intercept.ResponseInterceptor
 	if proxyPolicyPath != "" {
 		pf, err := policy.Load(proxyPolicyPath)
 		if err != nil {
@@ -132,13 +180,34 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		engine := policy.NewEngine(pf)
 		policyInterceptor = intercept.NewPolicyInterceptor(engine)
 		interceptors = append(interceptors, policyInterceptor)
+
+		// レスポンスインターセプター（response_patterns / allowed_tools が設定されている場合）
+		if len(pf.ResponsePatterns) > 0 || len(pf.AllowedTools) > 0 {
+			responseInterceptor = intercept.NewResponseInterceptor(engine)
+			interceptors = append(interceptors, responseInterceptor)
+			slog.Info("response interceptor enabled",
+				"response_patterns", len(pf.ResponsePatterns),
+				"allowed_tools", len(pf.AllowedTools))
+		}
+
 		slog.Info("policy loaded", "rules", len(pf.Rules), "mode", pf.Mode)
 	}
-	chain := intercept.NewChain(interceptors...)
+	// Webhook アラート
+	var webhookAlerter *alertpkg.WebhookAlerter
+	if cfg.Alerting.WebhookURL != "" {
+		dedupWindow := parseDuration(cfg.Alerting.DedupWindow, 5*time.Minute)
+		webhookAlerter = alertpkg.NewWebhookAlerter(cfg.Alerting.WebhookURL, dedupWindow)
+		defer webhookAlerter.Close()
+		slog.Info("webhook alerting enabled", "url", cfg.Alerting.WebhookURL, "dedup_window", dedupWindow)
+	}
 
 	var auditLogger *intercept.AuditLogger
 	if logger != nil {
-		auditLogger = intercept.NewAuditLogger(logger)
+		var auditOpts []intercept.AuditLoggerOption
+		if webhookAlerter != nil {
+			auditOpts = append(auditOpts, intercept.WithAlerter(webhookAlerter))
+		}
+		auditLogger = intercept.NewAuditLogger(logger, auditOpts...)
 	}
 
 	// 認証ミドルウェア構築
@@ -146,6 +215,28 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("mcpgw: %w", err)
 	}
+
+	// プラグインの読み込みと interceptor への追加
+	if len(cfg.Plugins) > 0 {
+		registry := plugin.NewRegistry()
+		plugin.RegisterBuiltins(registry)
+		plugins, pluginErr := plugin.LoadPlugins(registry, cfg.Plugins)
+		if pluginErr != nil {
+			return fmt.Errorf("mcpgw: %w", pluginErr)
+		}
+		for _, pl := range plugins {
+			interceptors = append(interceptors, pl)
+			slog.Info("plugin loaded", "name", pl.Name())
+		}
+		defer func() {
+			for _, pl := range plugins {
+				pl.Close()
+			}
+		}()
+	}
+
+	// interceptor チェーンの構築（プラグイン追加後に生成）
+	chain := intercept.NewChain(interceptors...)
 
 	// セッション TTL
 	sessionTTL := parseDuration(cfg.Session.TTL, 30*time.Minute)
@@ -164,9 +255,27 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// ルーティング設定
+	var router *routing.Router
+	if len(cfg.Routes) > 0 {
+		var routes []routing.Route
+		for _, rc := range cfg.Routes {
+			routes = append(routes, routing.Route{
+				MatchTools: rc.MatchTools,
+				Upstream:   rc.Upstream,
+			})
+		}
+		router = routing.NewRouter(routes, proxyUpstream)
+		slog.Info("multi-upstream routing enabled", "routes", len(routes))
+	}
+
+	// DrainTimeout 設定
+	drainTimeout := parseDuration(cfg.DrainTimeout, 30*time.Second)
+
 	// HTTP プロキシ
 	httpProxy := proxy.NewHTTPProxy(proxy.HTTPProxyConfig{
 		Upstream:            proxyUpstream,
+		Router:              router,
 		Chain:               chain,
 		Audit:               auditLogger,
 		SessionTTL:          sessionTTL,
@@ -175,16 +284,20 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		IdleConnTimeout:     idleConnTimeout,
 		RequestTimeout:      requestTimeout,
 		SSEIdleTimeout:      sseIdleTimeout,
+		DrainTimeout:        drainTimeout,
 		CircuitBreaker:      cbCfg,
 	})
 	defer httpProxy.Close()
 
-	// ハンドラチェーン: CORS → auth → HTTP proxy
+	// ハンドラチェーン: CORS → telemetry → auth → HTTP proxy
 	var handler http.Handler = httpProxy
 
 	if authMiddleware != nil {
 		handler = authMiddleware.Wrap(httpProxy)
 	}
+
+	// W3C traceparent ヘッダの伝播とトレース ID 生成
+	handler = telemetry.Middleware(handler)
 
 	if cors := proxy.NewCORSMiddleware(cfg.CORS.AllowedOrigins); cors != nil {
 		handler = cors.Wrap(handler)
@@ -195,6 +308,15 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+	}
+
+	// ポリシーホットリロード用のスワッパー
+	var swappers []EngineSwapper
+	if policyInterceptor != nil {
+		swappers = append(swappers, policyInterceptor)
+	}
+	if responseInterceptor != nil {
+		swappers = append(swappers, responseInterceptor)
 	}
 
 	// メインサーバー終了時に管理サーバーも停止するための cancel
@@ -208,6 +330,24 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		mgmtMux.Handle("/metrics", promhttp.Handler())
 		mgmtMux.HandleFunc("/healthz", healthHandler)
 		mgmtMux.HandleFunc("/readyz", readyzHandler(httpProxy))
+
+		// ダッシュボード
+		var pp dashboard.PolicyProvider
+		if policyInterceptor != nil {
+			pp = policyInterceptor
+		}
+		var dashSwappers []dashboard.EngineSwapper
+		for _, s := range swappers {
+			dashSwappers = append(dashSwappers, s)
+		}
+		dashboard.Register(mgmtMux, dashboard.Config{
+			AuditLogPath:   proxyAuditLogPath,
+			StatusProvider: httpProxy,
+			PolicyProvider: pp,
+			PolicyPath:     proxyPolicyPath,
+			EngineSwappers: dashSwappers,
+		})
+
 		mgmtSrv := &http.Server{
 			Addr:              cfg.Metrics.Addr,
 			Handler:           mgmtMux,
@@ -228,13 +368,15 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 
 	// SIGHUP によるポリシーホットリロード
-	watchPolicyReload(ctx, proxyPolicyPath, policyInterceptor)
+	watchPolicyReload(ctx, proxyPolicyPath, swappers...)
 
-	// graceful shutdown
+	// graceful shutdown（drain → shutdown の順序）
 	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		slog.Info("shutting down")
+		slog.Info("shutting down (drain phase)")
+		httpProxy.Drain()
+		slog.Info("drain complete, shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
@@ -328,6 +470,11 @@ func buildAuthMiddleware(cfg *config.Config) (*auth.Middleware, error) {
 	if algo != "" {
 		jwtCfg := auth.JWTConfig{Algorithm: algo}
 
+		// RolesClaim 設定
+		if cfg.Auth.JWT.RolesClaim != "" {
+			jwtCfg.RolesClaim = cfg.Auth.JWT.RolesClaim
+		}
+
 		switch algo {
 		case "HS256":
 			secret := proxyJWTSecret
@@ -379,11 +526,27 @@ func buildAuthMiddleware(cfg *config.Config) (*auth.Middleware, error) {
 		slog.Info("API key auth enabled", "keys", len(entries))
 	}
 
-	if jwtValidator == nil && apikeyValidator == nil {
+	// OAuth 2.1 / JWKS
+	var middlewareOpts []auth.MiddlewareOption
+	if cfg.Auth.OAuth.JWKSURL != "" {
+		oauthValidator, oauthErr := auth.NewOAuthValidator(auth.OAuthConfig{
+			JWKSURL:     cfg.Auth.OAuth.JWKSURL,
+			Issuer:      cfg.Auth.OAuth.Issuer,
+			Audience:    cfg.Auth.OAuth.Audience,
+			ResourceURL: cfg.Auth.OAuth.ResourceURL,
+		})
+		if oauthErr != nil {
+			return nil, oauthErr
+		}
+		middlewareOpts = append(middlewareOpts, auth.WithOAuth(oauthValidator))
+		slog.Info("OAuth 2.1 auth enabled", "jwks_url", cfg.Auth.OAuth.JWKSURL, "issuer", cfg.Auth.OAuth.Issuer)
+	}
+
+	if jwtValidator == nil && apikeyValidator == nil && len(middlewareOpts) == 0 {
 		return nil, nil
 	}
 
-	return auth.NewMiddleware(jwtValidator, apikeyValidator), nil
+	return auth.NewMiddleware(jwtValidator, apikeyValidator, middlewareOpts...), nil
 }
 
 // loadPublicKey は PEM ファイルから公開鍵を読み込む。

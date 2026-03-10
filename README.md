@@ -2,172 +2,251 @@
 
 # mcpgw
 
-Security gateway for Model Context Protocol (MCP) servers. Intercepts JSON-RPC traffic between clients and MCP servers to enforce policies, authenticate requests, and produce audit logs.
+**Security gateway for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) servers.**
 
-## Overview
+Intercepts every JSON-RPC message between AI agents and MCP servers to enforce policies, authenticate requests, detect threats, and produce audit logs — before anything reaches your tools.
 
-MCP allows AI agents to call external tools, but provides no built-in mechanism for access control or observability. mcpgw sits between the client and the MCP server as a transparent proxy, applying policy rules, authentication, rate limiting, and audit logging to every JSON-RPC message.
+```
+AI Agent ──► mcpgw ──► MCP Server
+              │
+              ├─ Authentication (JWT / API Key / OAuth)
+              ├─ Policy enforcement (allow / deny / audit)
+              ├─ Prompt injection detection
+              ├─ PII redaction
+              ├─ Rate limiting & circuit breaker
+              ├─ Server risk evaluation
+              ├─ Audit logging (JSONL)
+              └─ Real-time dashboard
+```
 
-Two operating modes:
+## Why mcpgw?
 
-- **`proxy`** — HTTP reverse proxy for MCP Streamable HTTP transport (with optional TLS termination)
-- **`wrap`** — stdio proxy that wraps an MCP server process and intercepts stdin/stdout
+MCP lets AI agents call external tools — execute commands, query databases, read files, send emails. But MCP has **no built-in security layer**. Any connected agent can call any tool with any arguments.
+
+mcpgw solves this by acting as a transparent security proxy:
+
+- **Block dangerous tool calls** — Prevent `exec_command("rm -rf /")` or `read_file("/etc/shadow")` with glob-based policy rules
+- **Authenticate every request** — JWT, API keys, or OAuth 2.1 with per-user identity tracking
+- **Detect prompt injection** — Heuristic analysis catches injection attempts before they reach tools
+- **Redact PII** — Automatically detect and redact sensitive data in tool arguments and responses
+- **Rate limit & circuit break** — Token bucket rate limiting per client, circuit breaker for upstream failures
+- **Evaluate server risk** — Automatically score MCP servers by their tool manifests (high/medium/low risk)
+- **Full audit trail** — Every request logged with who (subject), what (tool + args), where (upstream), and why (allow/block reason)
+- **Real-time dashboard** — Monitor traffic, analyze threats, review audit logs, approve/deny servers
 
 ## Quick Start
 
 ```bash
 go install github.com/knorq-ai/mcpgw@latest
 
-# HTTP proxy mode
+# Start the gateway
 mcpgw proxy --upstream http://localhost:8080 --policy policy.yaml
 
-# stdio wrap mode
-mcpgw wrap --policy policy.yaml -- npx @modelcontextprotocol/server-everything
+# Or use Docker
+docker run -p 9090:9090 -p 9091:9091 ghcr.io/knorq-ai/mcpgw \
+  proxy --upstream http://host.docker.internal:8080
 ```
+
+### Try the Demo
+
+The demo starts a vulnerable MCP server, the gateway, and runs a 4-phase attack simulation:
+
+```bash
+git clone https://github.com/knorq-ai/mcpgw.git
+cd mcpgw
+make demo
+# Open http://localhost:9091 for the dashboard
+```
+
+The simulation sends traffic as 3 users:
+- **alice** — Normal usage (echo, weather, math) → all pass
+- **mallory** — Attacks (exec_command, SQL injection, env leaks, phishing emails) → blocked
+- **bob** — Burst traffic → rate limited
+
+## Architecture
+
+```mermaid
+graph LR
+    A[AI Agent] -->|JSON-RPC| B[mcpgw]
+    B -->|Filtered| C[MCP Server]
+    B --> D[Audit Log]
+    B --> E[Dashboard :9091]
+    B --> F[Prometheus /metrics]
+
+    subgraph mcpgw
+        direction TB
+        B1[Auth Middleware] --> B2[Interceptor Chain]
+        B2 --> B3[Rate Limiter]
+        B2 --> B4[Policy Engine]
+        B2 --> B5[Injection Detector]
+        B2 --> B6[PII Redactor]
+        B2 --> B7[Schema Validator]
+        B2 --> B8[Server Evaluator]
+        B2 --> B9[Audit Logger]
+    end
+```
+
+Two operating modes:
+
+| Mode | Transport | Use Case |
+|------|-----------|----------|
+| `mcpgw proxy` | HTTP (Streamable HTTP) | Remote MCP servers, production deployments |
+| `mcpgw wrap` | stdio | Local MCP servers, Claude Desktop, development |
 
 ## Configuration
 
-All options can be set via CLI flags, config file (`~/.mcpgw/config.yaml` or `--config`), or environment variables. CLI flags take precedence.
+All options can be set via CLI flags, config file (`--config`), or environment variables.
 
 ```yaml
 upstream: http://localhost:8080
 listen: ":9090"
-policy: /etc/mcpgw/policy.yaml
-audit_log: /var/log/mcpgw/audit.jsonl
-
-tls:
-  cert_file: /etc/mcpgw/cert.pem
-  key_file: /etc/mcpgw/key.pem
+policy: policy.yaml
+audit_log: audit.jsonl
 
 auth:
-  jwt:
-    algorithm: HS256
-    secret: ${MCPGW_JWT_SECRET}
   api_keys:
-    - key: ${MCPGW_API_KEY_1}
-      name: ci-agent
+    - key: ${API_KEY_AGENT_1}
+      name: agent-1
+  jwt:
+    algorithm: RS256
+    jwks_url: https://auth.example.com/.well-known/jwks.json
 
 rate_limit:
   requests_per_second: 100
   burst: 20
 
+circuit_breaker:
+  max_failures: 5
+  timeout: "30s"
+
 session:
   ttl: "30m"
-
-logging:
-  level: info
-  format: text
 
 metrics:
   addr: ":9091"
 
-cors:
-  allowed_origins:
-    - "http://example.com"
+server_eval:
+  enabled: true
+  mode: enforce          # "enforce" or "audit"
+  auto_approve:
+    risk_levels: ["low"]
 
-transport:
-  max_idle_conns: 100
-  max_idle_conns_per_host: 10
-  idle_conn_timeout: "90s"
+plugins:
+  - name: pii
+    config:
+      mode: redact       # "detect" or "redact"
+  - name: injection
+    config:
+      threshold: 0.7
+  - name: schema
+    config:
+      strict: true
+
+routing:
+  routes:
+    - match: ["exec_*", "run_*"]
+      upstream: http://sandboxed-server:8080
+    - match: ["*"]
+      upstream: http://default-server:8080
 ```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `upstream` | string | *(required for proxy)* | Upstream MCP server URL |
-| `listen` | string | `:9090` | Listen address |
-| `policy` | string | | Policy YAML file path |
-| `audit_log` | string | `~/.mcpgw/audit.jsonl` | Audit log file path (JSONL, auto-rotated at 10MB) |
-| `tls.cert_file` | string | | TLS certificate (must be paired with `key_file`) |
-| `tls.key_file` | string | | TLS private key (must be paired with `cert_file`) |
-| `auth.jwt.algorithm` | string | | `HS256`, `RS256`, or `ES256` |
-| `auth.jwt.secret` | string | | HMAC secret for HS256 (env: `MCPGW_JWT_SECRET`) |
-| `auth.jwt.pubkey_file` | string | | Public key PEM for RS256/ES256 |
-| `auth.api_keys` | list | | Static API keys (`X-API-Key` header or `Authorization: ApiKey ...`) |
-| `rate_limit.requests_per_second` | float | | Token bucket refill rate |
-| `rate_limit.burst` | int | *(= requests_per_second)* | Token bucket capacity |
-| `session.ttl` | string | `30m` | Idle session timeout (`time.ParseDuration` format) |
-| `logging.level` | string | `info` | Log level (`debug`/`info`/`warn`/`error`) |
-| `logging.format` | string | `text` | Log format (`text`/`json`) |
-| `metrics.addr` | string | | Management server address (enables `/healthz` and `/metrics`) |
-| `cors.allowed_origins` | list | | Allowed CORS origins (`*` for all) |
-| `transport.max_idle_conns` | int | `100` | Max idle connections to upstream |
-| `transport.max_idle_conns_per_host` | int | `10` | Max idle connections per host |
-| `transport.idle_conn_timeout` | string | `90s` | Idle connection timeout |
 
 ## Policy
 
-Policies are YAML files evaluated in first-match-wins order. Unmatched requests are implicitly denied.
+Policies are YAML files evaluated in first-match-wins order. Unmatched requests are denied.
 
 ```yaml
 version: v1
-mode: enforce   # "enforce" or "audit" (log-only, never blocks)
+mode: enforce   # "enforce" or "audit" (log-only)
 rules:
-  - name: admin-exec
+  # Allow admins to run any tool
+  - name: admin-full-access
     match:
       methods: ["tools/call"]
-      tools: ["exec_*"]
       subjects: ["admin-*"]
     action: allow
 
-  - name: deny-exec
+  # Block dangerous commands for everyone else
+  - name: block-dangerous-exec
     match:
       methods: ["tools/call"]
       tools: ["exec_*"]
+      args:
+        command: ["*rm *", "*sudo*", "*chmod*"]
     action: deny
 
+  # Block sensitive file reads
+  - name: block-sensitive-files
+    match:
+      methods: ["tools/call"]
+      tools: ["read_file"]
+      args:
+        path: ["/etc/*", "*.env", "*.pem", "*.key"]
+    action: deny
+
+  # Allow everything else
   - name: default-allow
     match:
       methods: ["*"]
     action: allow
 ```
 
-| Field | Description |
-|-------|-------------|
-| `match.methods` | JSON-RPC method glob patterns (e.g., `tools/call`, `*`) |
-| `match.tools` | MCP tool name glob patterns (only evaluated for `tools/call`) |
-| `match.subjects` | Identity subject glob patterns (from JWT `sub` claim or API key name) |
-
-Validate a policy file without starting the server:
+Rules support glob patterns for methods, tools, subjects, and argument values. Validate without starting the server:
 
 ```bash
 mcpgw policy validate policy.yaml
 ```
 
-### Hot Reload
-
-Send `SIGHUP` to reload the policy file without downtime:
+Hot reload on `SIGHUP` — zero downtime:
 
 ```bash
 kill -HUP $(pgrep mcpgw)
 ```
 
-If the new file is invalid, the old policy remains active and an error is logged to stderr.
+## Built-in Plugins
 
-## How It Works
+| Plugin | Description |
+|--------|-------------|
+| **pii** | Detect or redact PII (emails, phone numbers, SSNs) in tool arguments and responses |
+| **injection** | Heuristic prompt injection detection with configurable sensitivity |
+| **schema** | Validate tool arguments against JSON schemas from `tools/list` |
 
-```
-Client ──► [CORS middleware] ──► [mcpgw proxy/wrap] ──► Upstream MCP Server
-                                        │
-                                        ├─ X-Request-Id propagation
-                                        ├─ Auth middleware (JWT / API key validation)
-                                        ├─ Interceptor chain:
-                                        │   ├─ Rate limiter (token bucket)
-                                        │   └─ Policy engine (first-match-wins rules)
-                                        ├─ Audit logger (JSONL)
-                                        ├─ Batch JSON-RPC support
-                                        └─ SIGHUP → atomic policy engine swap
+Plugins run as interceptors in the chain — both client-to-server and server-to-client directions.
 
-Management server (:9091) ──► /healthz, /metrics (Prometheus)
-```
+## Server Evaluation
 
-- Every JSON-RPC message (client-to-server) passes through the interceptor chain before forwarding
-- Server-to-client messages pass through the interceptor chain for audit logging, but policy rules only evaluate client-to-server direction (S→C is fail-open for policy). SSE events are inspected individually
-- Batch JSON-RPC requests are supported — each message in the batch is individually filtered
-- The policy engine uses `atomic.Pointer` for lock-free hot reload — zero downtime on `SIGHUP`
-- Audit log entries include timestamp, direction, method, action (pass/block), reason, and `request_id`
-- `X-Request-Id` is propagated through the entire request chain (auto-generated if missing)
+When a new MCP server connects, mcpgw evaluates its tool manifest and assigns a risk score:
 
-## CLI
+| Risk Level | Tool Patterns | Score |
+|------------|--------------|-------|
+| **High** | `exec_*`, `run_*`, `send_*`, `delete_*`, `write_*`, `sql_*` | 0.9 |
+| **Medium** | `read_file`, `get_env`, `list_*` | 0.5 |
+| **Low** | Everything else | 0.2 |
+
+In `enforce` mode, high-risk servers are blocked until manually approved via the dashboard. In `audit` mode, they pass but are logged for review.
+
+## Dashboard
+
+The management server (`metrics.addr`) serves a real-time dashboard:
+
+| Page | Description |
+|------|-------------|
+| **Overview** | Request counts, block rate, active sessions, latency |
+| **Audit Log** | Searchable log with subject, upstream, tool, action filters |
+| **Policies** | View and test policy rules |
+| **Servers** | Evaluated servers with risk scores, approve/deny actions |
+| **Analytics** | Aggregated stats by server, user, tool, or threat type |
+| **Status** | Health, circuit breaker state, upstream readiness |
+
+API endpoints: `/api/audit`, `/api/status`, `/api/servers`, `/api/analytics/*`, `/api/policy`
+
+## Observability
+
+- **Audit log** — JSONL with timestamp, direction, method, tool, args, action, reason, subject, upstream, request_id
+- **Prometheus metrics** — `mcpgw_requests_total`, `mcpgw_request_duration_seconds`, `mcpgw_active_sessions`, `mcpgw_server_evaluations_total`, etc.
+- **Health endpoints** — `/healthz` (liveness), `/readyz` (upstream reachability)
+- **Webhook alerts** — Real-time notifications on policy violations
+
+## CLI Reference
 
 | Command | Description |
 |---------|-------------|
@@ -176,29 +255,29 @@ Management server (:9091) ──► /healthz, /metrics (Prometheus)
 | `mcpgw policy validate <file>` | Validate a policy YAML file |
 | `mcpgw version` | Print version |
 
-### `proxy` flags
+Key `proxy` flags:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--upstream` | | Upstream MCP server URL |
-| `--listen` | `:9090` | Listen address |
-| `--policy` | | Policy YAML file path |
-| `--audit-log` | `~/.mcpgw/audit.jsonl` | Audit log path |
-| `--tls-cert` | | TLS certificate file |
-| `--tls-key` | | TLS private key file |
-| `--auth-jwt-algorithm` | | JWT algorithm (`HS256`/`RS256`/`ES256`) |
-| `--auth-jwt-secret` | | JWT HMAC secret |
-| `--auth-jwt-pubkey` | | JWT public key PEM file |
-| `--auth-apikeys` | | Comma-separated API keys |
-| `--config` | | Config file path |
+```
+--upstream       Upstream MCP server URL
+--listen         Listen address (default: :9090)
+--policy         Policy YAML file path
+--audit-log      Audit log path (default: ~/.mcpgw/audit.jsonl)
+--config         Config file path
+--tls-cert       TLS certificate file
+--tls-key        TLS private key file
+--auth-apikeys   Comma-separated API keys
+```
 
-### `wrap` flags
+## Contributing
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--policy` | | Policy YAML file path |
-| `--audit-log` | `~/.mcpgw/audit.jsonl` | Audit log path |
+Contributions are welcome. Please open an issue first to discuss what you want to change.
+
+```bash
+make test     # Run tests with race detection
+make build    # Build frontend + Go binary
+make demo     # Run the full demo
+```
 
 ## License
 
-Apache License 2.0
+[Apache License 2.0](LICENSE)

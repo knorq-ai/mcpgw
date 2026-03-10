@@ -4,6 +4,14 @@ policy: demo/policy.yaml
 audit_log: demo/audit.jsonl
 metrics:
   addr: ":${DEMO_MGMT_PORT}"
+auth:
+  api_keys:
+    - key: "demo-key-alice"
+      name: "alice"
+    - key: "demo-key-bob"
+      name: "bob"
+    - key: "demo-key-mallory"
+      name: "mallory"
 rate_limit:
   requests_per_second: 20
   burst: 30
@@ -12,3 +20,8 @@ circuit_breaker:
   timeout: "30s"
 session:
   ttl: "10m"
+server_eval:
+  enabled: true
+  mode: audit
+  auto_approve:
+    risk_levels: ["low"]

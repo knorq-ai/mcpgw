@@ -26,8 +26,33 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
 	ToolRateLimit  ToolRateLimitConfig  `yaml:"tool_rate_limit"`
 	Alerting       AlertingConfig       `yaml:"alerting"`
+	Telemetry      TelemetryConfig      `yaml:"telemetry,omitempty"`
 	DrainTimeout   string               `yaml:"drain_timeout,omitempty"`
 	Plugins        []PluginConfig       `yaml:"plugins,omitempty"`
+	ServerEval     ServerEvalConfig     `yaml:"server_eval,omitempty"`
+}
+
+// ServerEvalConfig は MCP サーバー評価の設定。
+type ServerEvalConfig struct {
+	Enabled     bool              `yaml:"enabled"`
+	Mode        string            `yaml:"mode"`         // "enforce" or "audit"
+	Allowlist   []ServerEntry     `yaml:"allowlist"`
+	AutoApprove AutoApproveConfig `yaml:"auto_approve"`
+	Webhook     string            `yaml:"webhook"`
+}
+
+// ServerEntry は許可リストのエントリ。
+type ServerEntry struct {
+	Name       string `yaml:"name"`
+	Upstream   string `yaml:"upstream"`     // glob パターン
+	Status     string `yaml:"status"`       // "approved"|"denied"|"pending"
+	ApprovedBy string `yaml:"approved_by"`
+	ApprovedAt string `yaml:"approved_at"`
+}
+
+// AutoApproveConfig は自動承認の設定。
+type AutoApproveConfig struct {
+	RiskLevels []string `yaml:"risk_levels"`
 }
 
 // RouteConfig はツールベースのルーティングルール。
@@ -50,7 +75,15 @@ type LoggingConfig struct {
 
 // MetricsConfig はメトリクス公開の設定。
 type MetricsConfig struct {
-	Addr string `yaml:"addr"` // 管理サーバーアドレス (例: ":9091")
+	Addr          string `yaml:"addr"`           // 管理サーバーアドレス (例: ":9091")
+	AllowExternal bool   `yaml:"allow_external"` // true のとき全インターフェースにバインド（デフォルト: false = 127.0.0.1 のみ）
+}
+
+// TelemetryConfig は分散トレーシングの設定。
+type TelemetryConfig struct {
+	OTLPEndpoint string  `yaml:"otlp_endpoint"` // OTLP エクスポーター宛先（空の場合は no-op）
+	ServiceName  string  `yaml:"service_name"`   // サービス名（デフォルト: "mcpgw"）
+	SampleRate   float64 `yaml:"sample_rate"`    // サンプリング率 0.0–1.0（デフォルト: 1.0）
 }
 
 // CORSConfig は CORS の設定。

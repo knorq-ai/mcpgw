@@ -40,8 +40,11 @@ func handleAudit(path string) http.HandlerFunc {
 		filterMethod := q.Get("method")
 		filterAction := q.Get("action")
 		filterDirection := q.Get("direction")
+		filterSubject := q.Get("subject")
+		filterUpstream := q.Get("upstream")
+		filterTool := q.Get("tool")
 
-		entries, err := readAuditLog(path, filterMethod, filterAction, filterDirection)
+		entries, err := readAuditLog(path, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool)
 		if err != nil {
 			// ファイルが存在しない場合は空レスポンス
 			if os.IsNotExist(err) {
@@ -74,13 +77,13 @@ func handleAudit(path string) http.HandlerFunc {
 	}
 }
 
-func readAuditLog(path, filterMethod, filterAction, filterDirection string) ([]audit.Entry, error) {
+func readAuditLog(path, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool string) ([]audit.Entry, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if info.Size() > maxAuditFileSize {
-		return readAuditLogTail(path, filterMethod, filterAction, filterDirection)
+		return readAuditLogTail(path, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool)
 	}
 
 	f, err := os.Open(path)
@@ -101,7 +104,7 @@ func readAuditLog(path, filterMethod, filterAction, filterDirection string) ([]a
 		if err := json.Unmarshal(line, &entry); err != nil {
 			continue
 		}
-		if matchAuditFilter(entry, filterMethod, filterAction, filterDirection) {
+		if matchAuditFilter(entry, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool) {
 			entries = append(entries, entry)
 		}
 	}
@@ -109,7 +112,7 @@ func readAuditLog(path, filterMethod, filterAction, filterDirection string) ([]a
 }
 
 // readAuditLogTail はファイルサイズが上限を超えた場合に末尾から読み取る。
-func readAuditLogTail(path, filterMethod, filterAction, filterDirection string) ([]audit.Entry, error) {
+func readAuditLogTail(path, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool string) ([]audit.Entry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -145,14 +148,14 @@ func readAuditLogTail(path, filterMethod, filterAction, filterDirection string) 
 		if err := json.Unmarshal(line, &entry); err != nil {
 			continue
 		}
-		if matchAuditFilter(entry, filterMethod, filterAction, filterDirection) {
+		if matchAuditFilter(entry, filterMethod, filterAction, filterDirection, filterSubject, filterUpstream, filterTool) {
 			entries = append(entries, entry)
 		}
 	}
 	return entries, scanner.Err()
 }
 
-func matchAuditFilter(e audit.Entry, method, action, direction string) bool {
+func matchAuditFilter(e audit.Entry, method, action, direction, subject, upstream, tool string) bool {
 	if method != "" && !strings.Contains(strings.ToLower(e.Method), strings.ToLower(method)) {
 		return false
 	}
@@ -160,6 +163,15 @@ func matchAuditFilter(e audit.Entry, method, action, direction string) bool {
 		return false
 	}
 	if direction != "" && e.Direction != direction {
+		return false
+	}
+	if subject != "" && !strings.Contains(strings.ToLower(e.Subject), strings.ToLower(subject)) {
+		return false
+	}
+	if upstream != "" && !strings.Contains(strings.ToLower(e.Upstream), strings.ToLower(upstream)) {
+		return false
+	}
+	if tool != "" && !strings.Contains(strings.ToLower(e.ToolName), strings.ToLower(tool)) {
 		return false
 	}
 	return true

@@ -54,6 +54,25 @@ var (
 			Help:      "サーキットブレーカーによるリクエスト拒否数",
 		},
 	)
+
+	// AuditLogErrors は監査ログ書き込み失敗の総数。
+	AuditLogErrors = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mcpgw",
+			Name:      "audit_log_errors_total",
+			Help:      "監査ログ書き込み失敗数",
+		},
+	)
+
+	// ServerEvaluationsTotal は MCP サーバー評価の総数。
+	ServerEvaluationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mcpgw",
+			Name:      "server_evaluations_total",
+			Help:      "MCP サーバー評価の総数",
+		},
+		[]string{"risk_level", "status"},
+	)
 )
 
 var registerOnce sync.Once
@@ -61,6 +80,6 @@ var registerOnce sync.Once
 // Register は全メトリクスを Prometheus デフォルトレジストリに登録する。
 func Register() {
 	registerOnce.Do(func() {
-		prometheus.MustRegister(RequestsTotal, RequestDuration, ActiveSessions, UpstreamErrors, CircuitBreakerTrips)
+		prometheus.MustRegister(RequestsTotal, RequestDuration, ActiveSessions, UpstreamErrors, CircuitBreakerTrips, AuditLogErrors, ServerEvaluationsTotal)
 	})
 }

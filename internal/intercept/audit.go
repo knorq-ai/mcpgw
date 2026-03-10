@@ -11,6 +11,7 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/auth"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/knorq-ai/mcpgw/internal/metrics"
 )
 
 // AuditLogger はメッセージと最終判定結果を監査ログに記録する。
@@ -62,6 +63,16 @@ func (a *AuditLogger) Log(ctx context.Context, dir Direction, msg *jsonrpc.Messa
 		entry.RequestID = reqID
 	}
 
+	// コンテキストから Subject を取得
+	if id := auth.FromContext(ctx); id != nil {
+		entry.Subject = id.Subject
+	}
+
+	// コンテキストから Upstream を取得
+	if upstream := UpstreamFromContext(ctx); upstream != "" {
+		entry.Upstream = upstream
+	}
+
 	if msg != nil {
 		entry.Method = msg.Method
 		entry.ID = strings.Trim(string(msg.ID), `"`)
@@ -90,6 +101,7 @@ func (a *AuditLogger) Log(ctx context.Context, dir Direction, msg *jsonrpc.Messa
 	if err := a.logger.Log(entry); err != nil {
 		// fail-open: ログ書き込み失敗はプロキシを止めない
 		slog.Error("audit log error", "error", err)
+		metrics.AuditLogErrors.Inc()
 	}
 
 	// ブロック時にアラート送信

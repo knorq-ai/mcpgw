@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/policy"
 	"github.com/knorq-ai/mcpgw/internal/proxy"
 	"github.com/knorq-ai/mcpgw/internal/routing"
+	"github.com/knorq-ai/mcpgw/internal/servereval"
 	"github.com/knorq-ai/mcpgw/internal/telemetry"
 )
 
@@ -88,6 +90,26 @@ func runProxy(cmd *cobra.Command, args []string) error {
 
 	// ログ初期化
 	setupLogging(cfg.Logging)
+
+	// メトリクス登録（管理サーバーの有無に関わらず常に登録 — コード内の Inc() が panic しないようにする）
+	metrics.Register()
+
+	// 分散トレーシング初期化
+	tracerShutdown, err := telemetry.InitTracer(telemetry.Config{
+		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
+		ServiceName:  cfg.Telemetry.ServiceName,
+		SampleRate:   cfg.Telemetry.SampleRate,
+	})
+	if err != nil {
+		return fmt.Errorf("mcpgw: init tracer: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracerShutdown(shutdownCtx); err != nil {
+			slog.Error("tracer shutdown error", "error", err)
+		}
+	}()
 
 	// upstream が未指定の場合はエラー
 	if proxyUpstream == "" {
@@ -235,6 +257,15 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
+	// サーバー評価
+	var serverEvalStore *servereval.Store
+	if cfg.ServerEval.Enabled {
+		serverEvalStore = servereval.NewStore()
+		sei := intercept.NewServerEvalInterceptor(serverEvalStore, cfg.ServerEval, webhookAlerter)
+		interceptors = append(interceptors, sei)
+		slog.Info("server evaluation enabled", "mode", cfg.ServerEval.Mode)
+	}
+
 	// interceptor チェーンの構築（プラグイン追加後に生成）
 	chain := intercept.NewChain(interceptors...)
 
@@ -303,6 +334,20 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		handler = cors.Wrap(handler)
 	}
 
+	// OAuth 2.1 discovery endpoint（RFC 9728 — 認証なしで公開）
+	if cfg.Auth.OAuth.JWKSURL != "" && cfg.Auth.OAuth.Issuer != "" {
+		wellKnown := auth.WellKnownHandler(cfg.Auth.OAuth.Issuer, cfg.Auth.OAuth.JWKSURL)
+		inner := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/oauth-authorization-server" {
+				wellKnown(w, r)
+				return
+			}
+			inner.ServeHTTP(w, r)
+		})
+		slog.Info("OAuth well-known endpoint enabled", "path", "/.well-known/oauth-authorization-server")
+	}
+
 	srv := &http.Server{
 		Addr:              proxyListen,
 		Handler:           handler,
@@ -323,15 +368,17 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	srvCtx, srvCancel := context.WithCancel(ctx)
 	defer srvCancel()
 
-	// 管理サーバー（メトリクス + ヘルスチェック）
+	// 管理サーバー（メトリクス + ヘルスチェック + ダッシュボード）
 	if cfg.Metrics.Addr != "" {
-		metrics.Register()
 		mgmtMux := http.NewServeMux()
+
+		// 公開エンドポイント（認証不要）
 		mgmtMux.Handle("/metrics", promhttp.Handler())
 		mgmtMux.HandleFunc("/healthz", healthHandler)
 		mgmtMux.HandleFunc("/readyz", readyzHandler(httpProxy))
 
-		// ダッシュボード
+		// ダッシュボード API（/api/* — 認証がある場合は認証を要求）
+		apiMux := http.NewServeMux()
 		var pp dashboard.PolicyProvider
 		if policyInterceptor != nil {
 			pp = policyInterceptor
@@ -340,21 +387,27 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		for _, s := range swappers {
 			dashSwappers = append(dashSwappers, s)
 		}
-		dashboard.Register(mgmtMux, dashboard.Config{
-			AuditLogPath:   proxyAuditLogPath,
-			StatusProvider: httpProxy,
-			PolicyProvider: pp,
-			PolicyPath:     proxyPolicyPath,
-			EngineSwappers: dashSwappers,
+		dashboard.Register(apiMux, dashboard.Config{
+			AuditLogPath:    proxyAuditLogPath,
+			StatusProvider:  httpProxy,
+			PolicyProvider:  pp,
+			PolicyPath:      proxyPolicyPath,
+			EngineSwappers:  dashSwappers,
+			ServerEvalStore: serverEvalStore,
 		})
 
+		// 管理サーバーは 127.0.0.1 バインド（デフォルト）でアクセス制限されるため
+		// 認証ミドルウェアは適用しない。ブラウザからダッシュボードにアクセス可能にする。
+		mgmtMux.Handle("/", apiMux)
+
+		mgmtAddr := resolveMgmtAddr(cfg.Metrics.Addr, cfg.Metrics.AllowExternal)
 		mgmtSrv := &http.Server{
-			Addr:              cfg.Metrics.Addr,
+			Addr:              mgmtAddr,
 			Handler:           mgmtMux,
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		go func() {
-			slog.Info("management server listening", "addr", cfg.Metrics.Addr)
+			slog.Info("management server listening", "addr", mgmtAddr)
 			if err := mgmtSrv.ListenAndServe(); err != http.ErrServerClosed {
 				slog.Error("management server error", "error", err)
 			}
@@ -445,13 +498,7 @@ func mergeConfig(cmd *cobra.Command, cfg *config.Config) {
 	if !cmd.Flags().Changed("auth-jwt-pubkey") && cfg.Auth.JWT.PubkeyFile != "" {
 		proxyJWTPubkey = cfg.Auth.JWT.PubkeyFile
 	}
-	if !cmd.Flags().Changed("auth-apikeys") && len(cfg.Auth.APIKeys) > 0 {
-		var keys []string
-		for _, k := range cfg.Auth.APIKeys {
-			keys = append(keys, k.Key)
-		}
-		proxyAPIKeys = strings.Join(keys, ",")
-	}
+	// 注: auth.api_keys は buildAuthMiddleware で直接処理するためここでは mergeしない
 	if !cmd.Flags().Changed("tls-cert") && cfg.TLS.CertFile != "" {
 		proxyTLSCert = cfg.TLS.CertFile
 	}
@@ -511,6 +558,7 @@ func buildAuthMiddleware(cfg *config.Config) (*auth.Middleware, error) {
 		keysStr = os.Getenv("MCPGW_API_KEYS")
 	}
 	if keysStr != "" {
+		// CLI フラグまたは環境変数で指定されたキー
 		keys := strings.Split(keysStr, ",")
 		var entries []auth.APIKeyEntry
 		for i, k := range keys {
@@ -524,6 +572,25 @@ func buildAuthMiddleware(cfg *config.Config) (*auth.Middleware, error) {
 		}
 		apikeyValidator = auth.NewAPIKeyValidator(entries)
 		slog.Info("API key auth enabled", "keys", len(entries))
+	} else if len(cfg.Auth.APIKeys) > 0 {
+		// 設定ファイルの名前付き API キーを使用
+		var entries []auth.APIKeyEntry
+		for i, k := range cfg.Auth.APIKeys {
+			if k.Key != "" {
+				name := k.Name
+				if name == "" {
+					name = fmt.Sprintf("apikey-%d", i)
+				}
+				entries = append(entries, auth.APIKeyEntry{
+					Key:  k.Key,
+					Name: name,
+				})
+			}
+		}
+		if len(entries) > 0 {
+			apikeyValidator = auth.NewAPIKeyValidator(entries)
+			slog.Info("API key auth enabled", "keys", len(entries))
+		}
 	}
 
 	// OAuth 2.1 / JWKS
@@ -603,6 +670,24 @@ func validateConfig(upstream, tlsCert, tlsKey string) error {
 		}
 	}
 	return nil
+}
+
+// resolveMgmtAddr は管理サーバーのリッスンアドレスを解決する。
+// allowExternal が false かつ host が空（例: ":9091"）の場合、
+// 127.0.0.1 にバインドしてネットワーク外部からのアクセスを防ぐ。
+func resolveMgmtAddr(addr string, allowExternal bool) string {
+	if allowExternal {
+		return addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// パースできない場合はそのまま返す（net/http が後でエラーにする）
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return addr
 }
 
 // parseDuration は文字列を time.Duration に変換する。

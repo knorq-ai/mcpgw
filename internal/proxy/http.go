@@ -292,8 +292,12 @@ func (p *HTTPProxy) UpstreamReady() bool {
 		return false
 	}
 	resp.Body.Close()
-	p.readySnap.Store(&readySnapshot{ready: true, at: time.Now()})
-	return true
+
+	// 2xx は ready。405 は HEAD 未実装だが upstream は alive であることを示す。
+	// その他（5xx, 4xx 等）は not ready として扱う。
+	ready := (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusMethodNotAllowed
+	p.readySnap.Store(&readySnapshot{ready: ready, at: time.Now()})
+	return ready
 }
 
 // ActiveSessionCount はアクティブセッション数を返す。
@@ -419,6 +423,14 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 		parsed = &msg
 	}
 
+	// upstream を先に解決してコンテキストに格納
+	targetUpstream := p.resolveUpstream("", nil)
+	if parsed != nil {
+		targetUpstream = p.resolveUpstream(parsed.Method, parsed.Params)
+	}
+	ctx := intercept.WithUpstream(r.Context(), targetUpstream)
+	r = r.WithContext(ctx)
+
 	// interceptor chain を実行
 	result := p.chain.Process(r.Context(), intercept.DirClientToServer, parsed, body)
 
@@ -460,13 +472,9 @@ func (p *HTTPProxy) handlePost(w http.ResponseWriter, r *http.Request) {
 
 	metrics.RequestsTotal.WithLabelValues(method, action).Inc()
 
-	// upstream に転送（ルーティング解決）
+	// upstream に転送
 	// POST は SSE レスポンスの可能性があるため context timeout は使わず、
 	// Transport.ResponseHeaderTimeout でヘッダ応答のタイムアウトを制御する。
-	targetUpstream := p.resolveUpstream(method, nil)
-	if parsed != nil {
-		targetUpstream = p.resolveUpstream(parsed.Method, parsed.Params)
-	}
 	upReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetUpstream, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -565,6 +573,10 @@ func (p *HTTPProxy) handleBatchPost(w http.ResponseWriter, r *http.Request, body
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
+
+	// バッチはデフォルト upstream を使用
+	ctx := intercept.WithUpstream(r.Context(), p.upstream)
+	r = r.WithContext(ctx)
 
 	// 各メッセージを C→S interceptor chain で処理
 	var passMessages []json.RawMessage

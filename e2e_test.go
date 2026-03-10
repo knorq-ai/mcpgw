@@ -317,6 +317,8 @@ func fakeUpstreamMCP(t *testing.T) *httptest.Server {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
+		case http.MethodHead:
+			w.WriteHeader(http.StatusOK)
 		case http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -3230,4 +3232,350 @@ plugins:
 	// id=2: 正常 → 通過
 	require.NotNil(t, msgs["2"])
 	assert.Nil(t, msgs["2"].Error, "正常なリクエストは通過するべき")
+}
+
+// --- Production Hardening E2E Tests ---
+
+// TestE2EMgmtLocalhostDefault は管理サーバーが AllowExternal=false 時に
+// 127.0.0.1 にバインドされることを検証する。
+func TestE2EMgmtLocalhostDefault(t *testing.T) {
+	upstream := fakeUpstreamMCP(t)
+	defer upstream.Close()
+
+	mgmtPort := getFreePort(t)
+	// getFreePort は "127.0.0.1:PORT" 形式を返すのでポート部分だけ抽出
+	_, port, err := net.SplitHostPort(mgmtPort)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// addr を ":PORT" 形式で指定（ホスト未指定）し、allow_external=false（デフォルト）
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+metrics:
+  addr: ":%s"
+`, upstream.URL, port)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, _ = startProxy(t, []string{"--config", cfgPath})
+	waitForTCP(t, net.JoinHostPort("127.0.0.1", port), 5*time.Second)
+
+	// 127.0.0.1 経由でアクセス可能
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%s/healthz", port), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestE2EMgmtAPINoAuth は管理サーバーが認証なしでアクセス可能であることを検証する。
+// 管理サーバーは localhost バインドによるネットワークレベルのアクセス制御を前提とし、
+// API キー認証はプロキシサーバーのみに適用される。
+func TestE2EMgmtAPINoAuth(t *testing.T) {
+	upstream := fakeUpstreamMCP(t)
+	defer upstream.Close()
+
+	mgmtAddr := getFreePort(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+metrics:
+  addr: %s
+auth:
+  api_keys:
+    - key: "test-mgmt-key"
+      name: "mgmt"
+`, upstream.URL, mgmtAddr)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, _ = startProxy(t, []string{"--config", cfgPath})
+	waitForTCP(t, mgmtAddr, 5*time.Second)
+	mgmtURL := "http://" + mgmtAddr
+
+	// 管理サーバーの全エンドポイントは認証なしでアクセス可能
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/api/status"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, mgmtURL+path, nil)
+		require.NoError(t, err)
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+		require.NoError(t, err, "path=%s", path)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "管理サーバー %s は認証不要で 200", path)
+	}
+}
+
+// TestE2EUpstreamReadyStatusCode は UpstreamReady が 5xx を返す upstream を
+// not-ready と判定することを検証する。
+func TestE2EUpstreamReadyStatusCode(t *testing.T) {
+	// 503 を返す upstream
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	mgmtAddr := getFreePort(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+metrics:
+  addr: %s
+`, upstream.URL, mgmtAddr)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, _ = startProxy(t, []string{"--config", cfgPath})
+	waitForTCP(t, mgmtAddr, 5*time.Second)
+
+	// upstream が 503 を返す → readyz は 503
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+mgmtAddr+"/readyz", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "503 を返す upstream は not-ready")
+}
+
+// --- Audit Enrichment & Server Eval & Analytics E2E Tests ---
+
+func TestE2EProxyAuditSubjectUpstream(t *testing.T) {
+	upstream := fakeUpstreamMCP(t)
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.jsonl")
+	secret := "audit-enrichment-test-secret!!"
+
+	_, proxyURL := startProxy(t, []string{
+		"--upstream", upstream.URL,
+		"--audit-log", logPath,
+		"--auth-jwt-algorithm", "HS256",
+		"--auth-jwt-secret", secret,
+	})
+
+	// JWT トークン生成
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "alice",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	tokenStr, err := token.SignedString([]byte(secret))
+	require.NoError(t, err)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"msg":"hello"}}}`
+	resp := httpPost(t, proxyURL, body, map[string]string{
+		"Authorization": "Bearer " + tokenStr,
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// 監査ログの検証
+	logData, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+
+	foundSubject := false
+	foundUpstream := false
+	for _, line := range strings.Split(strings.TrimSpace(string(logData)), "\n") {
+		var entry audit.Entry
+		require.NoError(t, json.Unmarshal([]byte(line), &entry))
+		if entry.Subject == "alice" {
+			foundSubject = true
+		}
+		if entry.Upstream != "" {
+			foundUpstream = true
+		}
+	}
+	assert.True(t, foundSubject, "監査ログに subject=alice が記録されるべき")
+	assert.True(t, foundUpstream, "監査ログに upstream が記録されるべき")
+}
+
+// fakeUpstreamWithToolsList は tools/list レスポンスに指定ツールを返すフェイク upstream。
+func fakeUpstreamWithToolsList(t *testing.T, tools []string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			var msg jsonrpc.Message
+			if err := json.Unmarshal(body, &msg); err != nil {
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
+			var resp jsonrpc.Message
+			resp.JSONRPC = "2.0"
+			resp.ID = msg.ID
+			if msg.Method == "tools/list" {
+				type toolDef struct {
+					Name string `json:"name"`
+				}
+				var tl []toolDef
+				for _, name := range tools {
+					tl = append(tl, toolDef{Name: name})
+				}
+				result, _ := json.Marshal(map[string]any{"tools": tl})
+				resp.Result = result
+			} else {
+				resp.Result = json.RawMessage(`{"echo":"` + msg.Method + `"}`)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		case http.MethodHead:
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.Error(w, "Not Found", http.StatusNotFound)
+		}
+	}))
+}
+
+func TestE2EProxyServerEvalBlock(t *testing.T) {
+	upstream := fakeUpstreamWithToolsList(t, []string{"exec_cmd", "delete_all", "run_script"})
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.jsonl")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+audit_log: %s
+server_eval:
+  enabled: true
+  mode: enforce
+`, upstream.URL, logPath)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, proxyURL := startProxy(t, []string{"--config", cfgPath})
+
+	// tools/list を送信 → upstream から高リスクツールが返り、S→C で interceptor がブロック
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	resp := httpPost(t, proxyURL, body, nil)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var msg jsonrpc.Message
+	require.NoError(t, json.Unmarshal(respBody, &msg))
+	// enforce + pending → S→C ブロック
+	require.NotNil(t, msg.Error, "高リスクサーバーは enforce モードでブロックされるべき")
+	assert.Contains(t, msg.Error.Message, "blocked by policy")
+}
+
+func TestE2EProxyServerEvalAudit(t *testing.T) {
+	upstream := fakeUpstreamWithToolsList(t, []string{"exec_cmd", "delete_all"})
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.jsonl")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+audit_log: %s
+server_eval:
+  enabled: true
+  mode: audit
+`, upstream.URL, logPath)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, proxyURL := startProxy(t, []string{"--config", cfgPath})
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	resp := httpPost(t, proxyURL, body, nil)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var msg jsonrpc.Message
+	require.NoError(t, json.Unmarshal(respBody, &msg))
+	// audit モードではブロックしない
+	assert.Nil(t, msg.Error, "audit モードではブロックしない")
+	assert.NotNil(t, msg.Result, "tools/list レスポンスが通過すべき")
+}
+
+func TestE2EProxyServerEvalAutoApprove(t *testing.T) {
+	upstream := fakeUpstreamWithToolsList(t, []string{"echo", "get_weather"})
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.jsonl")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+audit_log: %s
+server_eval:
+  enabled: true
+  mode: enforce
+  auto_approve:
+    risk_levels: ["low"]
+`, upstream.URL, logPath)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, proxyURL := startProxy(t, []string{"--config", cfgPath})
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	resp := httpPost(t, proxyURL, body, nil)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var msg jsonrpc.Message
+	require.NoError(t, json.Unmarshal(respBody, &msg))
+	assert.Nil(t, msg.Error, "低リスクツールは auto_approve で通過すべき")
+	assert.NotNil(t, msg.Result)
+}
+
+func TestE2EDashboardAnalytics(t *testing.T) {
+	upstream := fakeUpstreamMCP(t)
+	defer upstream.Close()
+
+	mgmtAddr := getFreePort(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.jsonl")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+upstream: %s
+audit_log: %s
+metrics:
+  addr: %s
+`, upstream.URL, logPath, mgmtAddr)
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	_, proxyURL := startProxy(t, []string{"--config", cfgPath})
+	waitForTCP(t, mgmtAddr, 5*time.Second)
+
+	// いくつかリクエストを送信して監査ログを生成
+	for i := 1; i <= 3; i++ {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"echo","arguments":{}}}`, i)
+		resp := httpPost(t, proxyURL, body, nil)
+		resp.Body.Close()
+	}
+
+	// Analytics API を呼び出し
+	mgmtURL := "http://" + mgmtAddr
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mgmtURL+"/api/analytics/by-tool", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result struct {
+		Groups []struct {
+			Key   string `json:"key"`
+			Total int    `json:"total"`
+		} `json:"groups"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	// echo ツールのグループが存在するはず
+	found := false
+	for _, g := range result.Groups {
+		if g.Key == "echo" && g.Total >= 3 {
+			found = true
+		}
+	}
+	assert.True(t, found, "analytics by-tool に echo の集計が含まれるべき")
 }

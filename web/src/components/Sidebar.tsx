@@ -1,10 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ScrollText, ShieldCheck, Activity } from "lucide-react";
+import { LayoutDashboard, ScrollText, ShieldCheck, Activity, Server, BarChart3 } from "lucide-react";
 
 const items = [
   { to: "/", icon: LayoutDashboard, label: "Overview" },
   { to: "/audit", icon: ScrollText, label: "Audit Log" },
   { to: "/policies", icon: ShieldCheck, label: "Policies" },
+  { to: "/servers", icon: Server, label: "Servers" },
+  { to: "/analytics", icon: BarChart3, label: "Analytics" },
   { to: "/status", icon: Activity, label: "Status" },
 ] as const;
 

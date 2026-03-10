@@ -12,6 +12,8 @@ type Entry struct {
 	Size          int            `json:"size"` // 生バイト長
 	Action        string         `json:"action"` // "pass" or "block"
 	Reason        string         `json:"reason,omitempty"`
+	Subject       string         `json:"subject,omitempty"`
+	Upstream      string         `json:"upstream,omitempty"`
 	RequestID     string         `json:"request_id,omitempty"`
 	ToolName      string         `json:"tool_name,omitempty"`
 	ToolArgs      map[string]any `json:"tool_args,omitempty"`

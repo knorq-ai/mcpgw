@@ -7,6 +7,12 @@ GW="${MCPGW_URL:-http://localhost:9090}"
 SESSION_ID=""
 REQ_ID=0
 
+# ---- デモユーザー API キー ----
+KEY_ALICE="demo-key-alice"
+KEY_BOB="demo-key-bob"
+KEY_MALLORY="demo-key-mallory"
+CURRENT_KEY="$KEY_ALICE"
+
 # ---- 色定義 ----
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -45,6 +51,7 @@ send_request() {
   LAST_STATUS=$(curl -s -o "$_TMPBODY" -w '%{http_code}' \
     -X POST "$GW" \
     -H 'Content-Type: application/json' \
+    -H "X-API-Key: ${CURRENT_KEY}" \
     "${session_opt[@]+"${session_opt[@]}"}" \
     "${header_opt[@]+"${header_opt[@]}"}" \
     -d "$payload" 2>/dev/null) || LAST_STATUS="000"
@@ -131,9 +138,10 @@ echo -e "${BOLD}${CYAN}╚══════════════════
 echo ""
 
 # ============================================================
-# Phase 1: Normal Usage
+# Phase 1: Normal Usage (user: alice)
 # ============================================================
-echo -e "${BOLD}━━━ Phase 1: Normal Usage ━━━${NC}"
+CURRENT_KEY="$KEY_ALICE"
+echo -e "${BOLD}━━━ Phase 1: Normal Usage (alice) ━━━${NC}"
 echo ""
 
 call_method "initialize" '{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"demo","version":"1.0"}}' "MCP handshake"
@@ -153,10 +161,11 @@ echo -e "${GREEN}  ✓ Phase 1 complete: all safe requests passed${NC}"
 sleep 1
 
 # ============================================================
-# Phase 2: Attack Simulation
+# Phase 2: Attack Simulation (user: mallory)
 # ============================================================
+CURRENT_KEY="$KEY_MALLORY"
 echo ""
-echo -e "${BOLD}━━━ Phase 2: Attack Simulation ━━━${NC}"
+echo -e "${BOLD}━━━ Phase 2: Attack Simulation (mallory) ━━━${NC}"
 echo ""
 
 echo -e "  ${BOLD}▸ RCE — Dangerous (BLOCK) vs Safe (PASS)${NC}"
@@ -198,10 +207,11 @@ echo -e "${RED}  ✗ Phase 2 complete: dangerous args blocked, safe args passed$
 sleep 1
 
 # ============================================================
-# Phase 3: Rate Limit Burst
+# Phase 3: Rate Limit Burst (user: bob)
 # ============================================================
+CURRENT_KEY="$KEY_BOB"
 echo ""
-echo -e "${BOLD}━━━ Phase 3: Rate Limit Burst ━━━${NC}"
+echo -e "${BOLD}━━━ Phase 3: Rate Limit Burst (bob) ━━━${NC}"
 echo ""
 
 RATE_PASSED=0
@@ -217,6 +227,7 @@ for i in $(seq 1 50); do
     curl -s -o "$tmpout" \
       -X POST "$GW" \
       -H 'Content-Type: application/json' \
+      -H "X-API-Key: ${KEY_BOB}" \
       -H "Mcp-Session-Id: ${SESSION_ID:-}" \
       -d "$payload" 2>/dev/null || true
     body=$(cat "$tmpout" 2>/dev/null) || body=""
@@ -249,10 +260,10 @@ echo -e "${YELLOW}  ⚡ Phase 3 complete: burst protection active${NC}"
 sleep 2
 
 # ============================================================
-# Phase 4: Mixed Traffic
+# Phase 4: Mixed Traffic (bob=safe, mallory=attack)
 # ============================================================
 echo ""
-echo -e "${BOLD}━━━ Phase 4: Mixed Realistic Traffic ━━━${NC}"
+echo -e "${BOLD}━━━ Phase 4: Mixed Realistic Traffic (bob/mallory) ━━━${NC}"
 echo ""
 
 TOOLS_SAFE=("echo" "get_weather" "calculate" "read_file" "exec_command" "sql_query")
@@ -278,9 +289,11 @@ MIXED_BLOCK=0
 
 for i in $(seq 1 20); do
   if (( i % 2 == 0 )); then
+    CURRENT_KEY="$KEY_BOB"
     idx=$(( (i / 2) % ${#TOOLS_SAFE[@]} ))
     call_tool "${TOOLS_SAFE[$idx]}" "${ARGS_SAFE[$idx]}" "Mixed safe #$i" && MIXED_PASS=$((MIXED_PASS + 1)) || MIXED_BLOCK=$((MIXED_BLOCK + 1))
   else
+    CURRENT_KEY="$KEY_MALLORY"
     idx=$(( (i / 2) % ${#TOOLS_ATTACK[@]} ))
     call_tool "${TOOLS_ATTACK[$idx]}" "${ARGS_ATTACK[$idx]}" "Mixed attack #$i" && MIXED_PASS=$((MIXED_PASS + 1)) || MIXED_BLOCK=$((MIXED_BLOCK + 1))
   fi

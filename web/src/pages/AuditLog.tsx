@@ -12,9 +12,12 @@ export default function AuditLog() {
   const [direction, setDirection] = useState("");
   const [action, setAction] = useState("");
   const [method, setMethod] = useState("");
+  const [subject, setSubject] = useState("");
+  const [upstream, setUpstream] = useState("");
+  const [tool, setTool] = useState("");
 
   const { data } = useQuery({
-    queryKey: ["audit", page, direction, action, method],
+    queryKey: ["audit", page, direction, action, method, subject, upstream, tool],
     queryFn: () =>
       fetchAudit({
         limit: PAGE_SIZE,
@@ -22,6 +25,9 @@ export default function AuditLog() {
         direction: direction || undefined,
         action: action || undefined,
         method: method || undefined,
+        subject: subject || undefined,
+        upstream: upstream || undefined,
+        tool: tool || undefined,
       }),
   });
 
@@ -34,6 +40,8 @@ export default function AuditLog() {
       render: (r: AuditEntry) => new Date(r.timestamp).toLocaleString(),
     },
     { key: "direction", header: "Direction", render: (r: AuditEntry) => r.direction },
+    { key: "subject", header: "Subject", render: (r: AuditEntry) => r.subject ? <span className="font-mono text-xs">{r.subject}</span> : <span className="text-gray-300">—</span> },
+    { key: "upstream", header: "Upstream", render: (r: AuditEntry) => r.upstream ? <span className="font-mono text-xs truncate max-w-[200px] block" title={r.upstream}>{r.upstream}</span> : <span className="text-gray-300">—</span> },
     { key: "method", header: "Method", render: (r: AuditEntry) => <span className="font-mono">{r.method || "—"}</span> },
     { key: "tool_name", header: "Tool", render: (r: AuditEntry) => {
       if (!r.tool_name) return <span className="text-gray-300">—</span>;
@@ -93,6 +101,27 @@ export default function AuditLog() {
           placeholder="Filter method..."
           value={method}
           onChange={(e) => { setMethod(e.target.value); setPage(0); }}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400"
+        />
+        <input
+          type="text"
+          placeholder="Filter subject..."
+          value={subject}
+          onChange={(e) => { setSubject(e.target.value); setPage(0); }}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400"
+        />
+        <input
+          type="text"
+          placeholder="Filter upstream..."
+          value={upstream}
+          onChange={(e) => { setUpstream(e.target.value); setPage(0); }}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400"
+        />
+        <input
+          type="text"
+          placeholder="Filter tool..."
+          value={tool}
+          onChange={(e) => { setTool(e.target.value); setPage(0); }}
           className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400"
         />
         <span className="ml-auto text-sm text-gray-400">

@@ -280,4 +280,4 @@ make demo     # フルデモを実行
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[MIT License](LICENSE)

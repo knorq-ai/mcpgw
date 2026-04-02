@@ -81,13 +81,6 @@ mcpgw enable    # wraps every server, creates default policy
 mcpgw disable   # reverts to original config
 ```
 
-**Docker:**
-
-```bash
-docker run -p 9090:9090 -p 9091:9091 ghcr.io/knorq-ai/mcpgw \
-  proxy --upstream http://host.docker.internal:8080
-```
-
 ---
 
 ## How It Works
@@ -96,7 +89,7 @@ docker run -p 9090:9090 -p 9091:9091 ghcr.io/knorq-ai/mcpgw \
 AI Agent ──► mcpgw ──► MCP Server
                │
                ├─ Policy engine (allow / deny / audit)
-               ├─ Authentication (JWT / API Key / OAuth 2.1)
+               ├─ Authentication (JWT / API Key / OAuth token validation)
                ├─ Prompt injection detection
                ├─ PII redaction
                ├─ Rate limiting & circuit breaker
@@ -330,6 +323,7 @@ session:
 
 metrics:
   addr: ":9091"
+  api_key: ${MCPGW_MGMT_KEY}    # protect dashboard API (optional)
 
 server_eval:
   enabled: true

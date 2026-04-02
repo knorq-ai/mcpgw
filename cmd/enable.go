@@ -337,6 +337,20 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	}
 
 	if total == 0 {
+		// 設定ファイルが存在しない場合は明示的にエラーを返す
+		found := false
+		for _, cp := range claudeConfigPaths() {
+			if _, err := os.Stat(cp); err == nil {
+				found = true
+				break
+			}
+		}
+		if _, err := os.Stat(claudeScopeConfigPath()); err == nil {
+			found = true
+		}
+		if !found {
+			return fmt.Errorf("Claude Code config not found. Is Claude Code installed?\n  Expected: ~/.claude.json or ~/.claude/.mcp.json")
+		}
 		fmt.Fprintln(os.Stderr, "No MCP servers found to wrap (already enabled or none configured).")
 		return nil
 	}

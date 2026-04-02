@@ -77,6 +77,7 @@ type LoggingConfig struct {
 type MetricsConfig struct {
 	Addr          string `yaml:"addr"`           // 管理サーバーアドレス (例: ":9091")
 	AllowExternal bool   `yaml:"allow_external"` // true のとき全インターフェースにバインド（デフォルト: false = 127.0.0.1 のみ）
+	APIKey        string `yaml:"api_key"`        // 管理 API の認証キー（空の場合は認証なし）
 }
 
 // TelemetryConfig は分散トレーシングの設定。

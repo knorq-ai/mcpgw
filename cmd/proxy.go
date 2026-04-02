@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -396,9 +397,12 @@ func runProxy(cmd *cobra.Command, args []string) error {
 			ServerEvalStore: serverEvalStore,
 		})
 
-		// 管理サーバーは 127.0.0.1 バインド（デフォルト）でアクセス制限されるため
-		// 認証ミドルウェアは適用しない。ブラウザからダッシュボードにアクセス可能にする。
-		mgmtMux.Handle("/", apiMux)
+		// API 認証ミドルウェア（metrics.api_key が設定されている場合）
+		var apiHandler http.Handler = apiMux
+		if cfg.Metrics.APIKey != "" {
+			apiHandler = mgmtAPIKeyAuth(cfg.Metrics.APIKey, apiMux)
+		}
+		mgmtMux.Handle("/", apiHandler)
 
 		mgmtAddr := resolveMgmtAddr(cfg.Metrics.Addr, cfg.Metrics.AllowExternal)
 		mgmtSrv := &http.Server{
@@ -670,6 +674,26 @@ func validateConfig(upstream, tlsCert, tlsKey string) error {
 		}
 	}
 	return nil
+}
+
+// mgmtAPIKeyAuth は管理 API に API キー認証を適用するミドルウェア。
+// /api/* パスに対して X-API-Key ヘッダまたは ?api_key クエリパラメータを検証する。
+// 静的ファイル（ダッシュボード SPA）は認証をスキップする。
+func mgmtAPIKeyAuth(key string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /api/* のみ認証を要求（SPA やファビコン等はスキップ）
+		if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+			got := r.Header.Get("X-API-Key")
+			if got == "" {
+				got = r.URL.Query().Get("api_key")
+			}
+			if subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // resolveMgmtAddr は管理サーバーのリッスンアドレスを解決する。

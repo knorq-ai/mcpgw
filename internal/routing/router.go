@@ -10,7 +10,7 @@ import (
 // Route は upstream へのルーティングルール。
 type Route struct {
 	MatchTools []string `yaml:"match_tools"` // ツール名 glob パターン
-	Upstream   string   `yaml:"upstream"`     // 転送先 URL
+	Upstream   string   `yaml:"upstream"`    // 転送先 URL
 }
 
 // Router はツール名に基づいて upstream を決定する。

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/knorq-ai/mcpgw/internal/policy"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,7 +19,7 @@ type TestScenarioFile struct {
 type TestScenario struct {
 	Name    string   `yaml:"name"`
 	Method  string   `yaml:"method"`
-	Params  string   `yaml:"params"`         // JSON 文字列
+	Params  string   `yaml:"params"` // JSON 文字列
 	Subject string   `yaml:"subject"`
 	Roles   []string `yaml:"roles,omitempty"` // ドキュメント用（評価には使用しない）
 	Expect  string   `yaml:"expect"`          // "allow" or "deny"

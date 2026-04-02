@@ -20,16 +20,16 @@ import (
 // --- テスト用モック ---
 
 type mockStatusProvider struct {
-	upstream    string
-	ready       bool
-	cbState     string
-	sessions    int
+	upstream string
+	ready    bool
+	cbState  string
+	sessions int
 }
 
-func (m *mockStatusProvider) Upstream() string              { return m.upstream }
-func (m *mockStatusProvider) UpstreamReady() bool           { return m.ready }
-func (m *mockStatusProvider) CircuitBreakerState() string   { return m.cbState }
-func (m *mockStatusProvider) ActiveSessionCount() int       { return m.sessions }
+func (m *mockStatusProvider) Upstream() string            { return m.upstream }
+func (m *mockStatusProvider) UpstreamReady() bool         { return m.ready }
+func (m *mockStatusProvider) CircuitBreakerState() string { return m.cbState }
+func (m *mockStatusProvider) ActiveSessionCount() int     { return m.sessions }
 
 type mockPolicyProvider struct {
 	pf *policy.PolicyFile

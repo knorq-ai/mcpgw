@@ -27,12 +27,12 @@ type EngineSwapper interface {
 
 // Config はダッシュボードの設定。
 type Config struct {
-	AuditLogPath   string
-	StatusProvider StatusProvider
-	PolicyProvider PolicyProvider
-	PolicyPath     string               // ポリシーファイルパス（PUT /api/policy 用）
-	EngineSwappers []EngineSwapper      // ホットリロード用
-	ServerEvalStore *servereval.Store   // サーバー評価ストア（nil の場合は無効）
+	AuditLogPath    string
+	StatusProvider  StatusProvider
+	PolicyProvider  PolicyProvider
+	PolicyPath      string            // ポリシーファイルパス（PUT /api/policy 用）
+	EngineSwappers  []EngineSwapper   // ホットリロード用
+	ServerEvalStore *servereval.Store // サーバー評価ストア（nil の場合は無効）
 }
 
 // Register はダッシュボード関連のハンドラを mux に登録する。

@@ -51,9 +51,9 @@ func TestScoreToolsAllLow(t *testing.T) {
 
 func TestScoreToolsMixed(t *testing.T) {
 	tools := []ToolInfo{
-		{Name: "echo"},        // low 0.2
-		{Name: "exec_cmd"},    // high 0.9
-		{Name: "list_files"},  // medium 0.5
+		{Name: "echo"},       // low 0.2
+		{Name: "exec_cmd"},   // high 0.9
+		{Name: "list_files"}, // medium 0.5
 	}
 	level, score := ScoreTools(tools)
 	assert.Equal(t, RiskHigh, level)

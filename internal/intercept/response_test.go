@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 	"github.com/knorq-ai/mcpgw/internal/policy"
+	"github.com/stretchr/testify/assert"
 )
 
 func newResponseTestEngine(responsePatterns []string, allowedTools []string) *policy.Engine {

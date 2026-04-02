@@ -8,8 +8,8 @@ type Entry struct {
 	Direction     string         `json:"direction"` // "c2s" or "s2c"
 	Method        string         `json:"method,omitempty"`
 	ID            string         `json:"id,omitempty"`
-	Kind          string         `json:"kind"` // "request", "response", "notification", "unknown"
-	Size          int            `json:"size"` // 生バイト長
+	Kind          string         `json:"kind"`   // "request", "response", "notification", "unknown"
+	Size          int            `json:"size"`   // 生バイト長
 	Action        string         `json:"action"` // "pass" or "block"
 	Reason        string         `json:"reason,omitempty"`
 	Subject       string         `json:"subject,omitempty"`

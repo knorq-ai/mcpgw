@@ -66,20 +66,20 @@ type CircuitBreakerConfig struct {
 // POST/GET/DELETE を単一エンドポイントで処理し、interceptor chain と audit logger を適用する。
 type HTTPProxy struct {
 	upstream       string
-	router         *routing.Router     // ツール名ベースのルーティング（nil = 単一 upstream）
+	router         *routing.Router // ツール名ベースのルーティング（nil = 単一 upstream）
 	chain          *intercept.Chain
 	audit          *intercept.AuditLogger
-	client         *http.Client        // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
+	client         *http.Client // ResponseHeaderTimeout で応答開始を制限、ボディ読み取りは無制限
 	mu             sync.Mutex
 	sessions       map[string]time.Time // sid → 最終アクセス時刻
 	ttl            time.Duration
 	requestTimeout time.Duration
 	sseIdleTimeout time.Duration
 	drainTimeout   time.Duration
-	draining       atomic.Bool          // drain フェーズ中フラグ
-	drainWg        sync.WaitGroup       // アクティブな SSE ストリーム数を追跡
-	cbs            map[string]*circuitBreaker // upstream URL → サーキットブレーカー
-	cb             *circuitBreaker      // デフォルト CB（後方互換）
+	draining       atomic.Bool                   // drain フェーズ中フラグ
+	drainWg        sync.WaitGroup                // アクティブな SSE ストリーム数を追跡
+	cbs            map[string]*circuitBreaker    // upstream URL → サーキットブレーカー
+	cb             *circuitBreaker               // デフォルト CB（後方互換）
 	readyClient    *http.Client                  // readiness probe 専用（本番接続プールと分離）
 	readySnap      atomic.Pointer[readySnapshot] // UpstreamReady キャッシュ
 	readyMu        sync.Mutex                    // UpstreamReady の同時 HEAD リクエストを防止

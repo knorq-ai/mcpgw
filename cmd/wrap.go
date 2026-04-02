@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/spf13/cobra"
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/config"
 	"github.com/knorq-ai/mcpgw/internal/intercept"
 	"github.com/knorq-ai/mcpgw/internal/plugin"
 	"github.com/knorq-ai/mcpgw/internal/policy"
 	"github.com/knorq-ai/mcpgw/internal/proxy"
+	"github.com/spf13/cobra"
 )
 
 var (

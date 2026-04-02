@@ -9,9 +9,9 @@ import (
 
 // Pattern は PII パターンの定義。
 type Pattern struct {
-	Name     string           // パターン名
-	Re       *regexp.Regexp   // 検出用正規表現
-	Severity float64          // 重要度スコア (0.0-1.0)
+	Name     string            // パターン名
+	Re       *regexp.Regexp    // 検出用正規表現
+	Severity float64           // 重要度スコア (0.0-1.0)
 	Validate func(string) bool // 追加バリデーション（nil の場合は正規表現マッチのみ）
 }
 

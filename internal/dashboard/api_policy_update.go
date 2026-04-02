@@ -16,9 +16,9 @@ import (
 const maxPolicyBodySize = 1 * 1024 * 1024 // 1MB
 
 type policyUpdateResponse struct {
-	OK      bool           `json:"ok"`
-	Policy  *policyResponse `json:"policy,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	OK     bool            `json:"ok"`
+	Policy *policyResponse `json:"policy,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 // handlePolicyUpdate は PUT /api/policy のハンドラ。

@@ -108,25 +108,25 @@ func validateResource(claims jwt.MapClaims, resource string) error {
 
 // oauthMetadata は OAuth 2.1 認可サーバメタデータ（RFC 8414 / RFC 9728）を表す。
 type oauthMetadata struct {
-	Issuer                string   `json:"issuer"`
-	JWKSURI               string   `json:"jwks_uri"`
-	ResponseTypesSupported []string `json:"response_types_supported"`
-	SubjectTypesSupported  []string `json:"subject_types_supported"`
+	Issuer                            string   `json:"issuer"`
+	JWKSURI                           string   `json:"jwks_uri"`
+	ResponseTypesSupported            []string `json:"response_types_supported"`
+	SubjectTypesSupported             []string `json:"subject_types_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-	ScopesSupported        []string `json:"scopes_supported,omitempty"`
-	ResourceRegistration   string   `json:"resource_registration_endpoint,omitempty"`
+	ScopesSupported                   []string `json:"scopes_supported,omitempty"`
+	ResourceRegistration              string   `json:"resource_registration_endpoint,omitempty"`
 }
 
 // WellKnownHandler は /.well-known/oauth-authorization-server メタデータを返すハンドラを生成する。
 // RFC 8414 および RFC 9728 に準拠したメタデータを提供する。
 func WellKnownHandler(issuer, jwksURL string) http.HandlerFunc {
 	meta := oauthMetadata{
-		Issuer:                issuer,
-		JWKSURI:               jwksURL,
-		ResponseTypesSupported: []string{"code"},
-		SubjectTypesSupported:  []string{"public"},
+		Issuer:                            issuer,
+		JWKSURI:                           jwksURL,
+		ResponseTypesSupported:            []string{"code"},
+		SubjectTypesSupported:             []string{"public"},
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "private_key_jwt"},
-		ScopesSupported:        []string{"mcp:tools", "mcp:resources", "mcp:prompts"},
+		ScopesSupported:                   []string{"mcp:tools", "mcp:resources", "mcp:prompts"},
 	}
 
 	body, _ := json.Marshal(meta)

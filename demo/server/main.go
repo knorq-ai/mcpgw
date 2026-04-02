@@ -74,7 +74,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Text string `json:"text"` }
+				var p struct {
+					Text string `json:"text"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]string{"echoed": p.Text})
 			},
@@ -92,7 +94,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ City string `json:"city"` }
+				var p struct {
+					City string `json:"city"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]any{
 					"city":        p.City,
@@ -115,7 +119,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Expression string `json:"expression"` }
+				var p struct {
+					Expression string `json:"expression"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]string{
 					"expression": p.Expression,
@@ -137,7 +143,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Command string `json:"command"` }
+				var p struct {
+					Command string `json:"command"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]string{
 					"output": fmt.Sprintf("executed: %s\nuid=0(root) gid=0(root)", p.Command),
@@ -157,7 +165,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Path string `json:"path"` }
+				var p struct {
+					Path string `json:"path"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]string{
 					"path":    p.Path,
@@ -178,7 +188,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Name string `json:"name"` }
+				var p struct {
+					Name string `json:"name"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]string{
 					"name":  p.Name,
@@ -199,7 +211,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Query string `json:"query"` }
+				var p struct {
+					Query string `json:"query"`
+				}
 				json.Unmarshal(args, &p)
 				return json.Marshal(map[string]any{
 					"query": p.Query,
@@ -282,8 +296,8 @@ func (s *server) handleMessage(r *http.Request, msg jsonrpcMessage) (*jsonrpcMes
 		headers["Mcp-Session-Id"] = sid
 		result, _ := json.Marshal(map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]any{"tools": map[string]any{}},
-			"serverInfo":     map[string]any{"name": "demo-vulnerable-server", "version": "1.0.0"},
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "demo-vulnerable-server", "version": "1.0.0"},
 		})
 		return &jsonrpcMessage{JSONRPC: "2.0", ID: msg.ID, Result: result}, headers
 

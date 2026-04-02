@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/intercept"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 	"github.com/knorq-ai/mcpgw/internal/policy"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPolicyBlocksToolsCall(t *testing.T) {

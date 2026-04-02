@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/knorq-ai/mcpgw/internal/policy"
+	"github.com/spf13/cobra"
 )
 
 var policyDiffCmd = &cobra.Command{

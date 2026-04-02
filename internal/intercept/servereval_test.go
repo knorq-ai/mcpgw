@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/knorq-ai/mcpgw/internal/config"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
 	"github.com/knorq-ai/mcpgw/internal/metrics"
 	"github.com/knorq-ai/mcpgw/internal/servereval"
+	"github.com/stretchr/testify/assert"
 )
 
 func init() {

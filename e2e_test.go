@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMain はテスト実行前にバイナリをビルドし、テスト後に削除する。
@@ -1227,10 +1227,10 @@ func (r *mcpRequestRecorder) snapshot() []mcpRecordedRequest {
 
 // mcpMockOpts はモック MCP サーバーの設定。
 type mcpMockOpts struct {
-	useSSE      bool                 // GET → SSE ストリーム対応
-	tools       []mcpToolDef         // 登録ツール定義
-	recorder    *mcpRequestRecorder  // リクエスト記録（nil なら記録しない）
-	sseNotifyCh chan string           // SSE イベント送信チャネル（useSSE=true 時に使用）
+	useSSE      bool                // GET → SSE ストリーム対応
+	tools       []mcpToolDef        // 登録ツール定義
+	recorder    *mcpRequestRecorder // リクエスト記録（nil なら記録しない）
+	sseNotifyCh chan string         // SSE イベント送信チャネル（useSSE=true 時に使用）
 }
 
 // mcpToolSchema はモック MCP ツールのスキーマ定義（tools/list レスポンス用）。

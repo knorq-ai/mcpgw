@@ -132,7 +132,7 @@ rules:
     match:
       methods: ["tools/call"]
       tools: ["exec_*"]
-      args:
+      arguments:
         command: ["*rm -rf*", "*sudo*", "*chmod 777*"]
     action: deny
 
@@ -141,7 +141,7 @@ rules:
     match:
       methods: ["tools/call"]
       tools: ["read_file"]
-      args:
+      arguments:
         path: ["/etc/*", "*.env", "*.pem", "*.key"]
     action: deny
 
@@ -344,9 +344,9 @@ plugins:
 
 routing:
   routes:
-    - match: ["exec_*", "run_*"]
+    - match_tools: ["exec_*", "run_*"]
       upstream: http://sandboxed-server:8080
-    - match: ["*"]
+    - match_tools: ["*"]
       upstream: http://default-server:8080
 
 cors:
@@ -375,6 +375,20 @@ telemetry:
 | `mcpgw disable` | Restore original Claude Code config |
 | `mcpgw policy validate` | Validate a policy YAML file |
 | `mcpgw version` | Print version |
+
+---
+
+## Limitations
+
+mcpgw is a **policy enforcement and monitoring layer**, not a complete security solution. Be aware of:
+
+- **MCP protocol only** — mcpgw intercepts JSON-RPC messages between agents and MCP servers. It does not control direct HTTP calls, file system access, or shell commands made by tool implementations.
+- **PII detection is regex-based** — Covers credit cards, SSNs, AWS keys, emails, and phone numbers. Does not cover all secret formats (e.g., GitHub tokens, Stripe keys). See the PII plugin source for exact patterns.
+- **Injection detection is heuristic** — Catches common prompt injection patterns via scoring. Sophisticated or obfuscated attacks may evade detection. Treat as defense-in-depth, not a guarantee.
+- **Policy rules match on names and arguments** — Rules check tool names and argument values via glob/regex. They cannot analyze semantic intent or detect context-dependent attacks.
+- **Tool description poisoning requires explicit rules** — mcpgw blocks tool *calls*, not tool *descriptions*. Poisoned descriptions that trick agents into making calls are blocked only if those calls match deny rules.
+
+For maximum security, deploy mcpgw alongside network egress controls, tool sandboxing, and regular audit log review.
 
 ---
 

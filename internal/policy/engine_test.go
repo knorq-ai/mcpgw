@@ -351,8 +351,8 @@ func TestEngineArgumentMultiPatternOR(t *testing.T) {
 func TestEngineArgumentMultiArgAND(t *testing.T) {
 	engine := newTestPolicy([]Rule{
 		{Name: "block-specific", Match: Match{
-			Methods:   []string{"tools/call"},
-			Tools:     []string{"send_email"},
+			Methods: []string{"tools/call"},
+			Tools:   []string{"send_email"},
 			Arguments: map[string][]string{
 				"to":      {"*@evil.com"},
 				"subject": {"*urgent*"},
@@ -788,8 +788,8 @@ func TestExtractArgumentsMaxDepth(t *testing.T) {
 func TestEngineNestedArgumentMatch(t *testing.T) {
 	engine := newTestPolicy([]Rule{
 		{Name: "block-recursive-delete", Match: Match{
-			Methods:   []string{"tools/call"},
-			Tools:     []string{"file_op"},
+			Methods: []string{"tools/call"},
+			Tools:   []string{"file_op"},
 			Arguments: map[string][]string{
 				"action":            {"delete"},
 				"options.recursive": {"true"},

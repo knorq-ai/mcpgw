@@ -11,7 +11,7 @@ import (
 type testScenario struct {
 	Name    string   `json:"name"`
 	Method  string   `json:"method"`
-	Params  string   `json:"params"`           // JSON 文字列
+	Params  string   `json:"params"` // JSON 文字列
 	Subject string   `json:"subject,omitempty"`
 	Roles   []string `json:"roles,omitempty"`
 	Expect  string   `json:"expect"` // "allow" or "deny"

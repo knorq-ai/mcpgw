@@ -11,16 +11,16 @@ import (
 )
 
 type statsResponse struct {
-	RequestsTotal      float64            `json:"requests_total"`
-	RequestsBlocked    float64            `json:"requests_blocked"`
-	BlockedRate        float64            `json:"blocked_rate"`
-	ActiveSessions     float64            `json:"active_sessions"`
-	UpstreamErrors     float64            `json:"upstream_errors"`
-	CircuitBreakerTrips float64           `json:"circuit_breaker_trips"`
-	LatencyP50         float64            `json:"latency_p50"`
-	LatencyP95         float64            `json:"latency_p95"`
-	LatencyP99         float64            `json:"latency_p99"`
-	RequestsByMethod   map[string]float64 `json:"requests_by_method"`
+	RequestsTotal       float64            `json:"requests_total"`
+	RequestsBlocked     float64            `json:"requests_blocked"`
+	BlockedRate         float64            `json:"blocked_rate"`
+	ActiveSessions      float64            `json:"active_sessions"`
+	UpstreamErrors      float64            `json:"upstream_errors"`
+	CircuitBreakerTrips float64            `json:"circuit_breaker_trips"`
+	LatencyP50          float64            `json:"latency_p50"`
+	LatencyP95          float64            `json:"latency_p95"`
+	LatencyP99          float64            `json:"latency_p99"`
+	RequestsByMethod    map[string]float64 `json:"requests_by_method"`
 }
 
 func handleStats(w http.ResponseWriter, r *http.Request) {

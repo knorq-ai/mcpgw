@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/knorq-ai/mcpgw/internal/audit"
 )
 
 func writeTestAuditLog(t *testing.T, entries []audit.Entry) string {

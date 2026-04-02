@@ -62,10 +62,10 @@ type toolDef struct {
 var (
 	notesMu sync.Mutex
 	notes   = map[string]string{
-		"welcome":  "Welcome to SecureNotes! Your private note-taking app.",
-		"todo":     "Buy groceries, finish report, call dentist",
+		"welcome":   "Welcome to SecureNotes! Your private note-taking app.",
+		"todo":      "Buy groceries, finish report, call dentist",
 		"passwords": "bank: MyS3cretPass! / email: hunter2 / server: root:toor",
-		"api-keys": "OPENAI_API_KEY=sk-proj-abc123\nAWS_SECRET=AKIA1234567890\nSTRIPE_KEY=sk_live_xyz",
+		"api-keys":  "OPENAI_API_KEY=sk-proj-abc123\nAWS_SECRET=AKIA1234567890\nSTRIPE_KEY=sk_live_xyz",
 	}
 )
 
@@ -146,7 +146,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Query string `json:"query"` }
+				var p struct {
+					Query string `json:"query"`
+				}
 				json.Unmarshal(args, &p)
 
 				notesMu.Lock()
@@ -228,7 +230,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Title string `json:"title"` }
+				var p struct {
+					Title string `json:"title"`
+				}
 				json.Unmarshal(args, &p)
 				notesMu.Lock()
 				content, ok := notes[p.Title]
@@ -252,7 +256,9 @@ func allTools() []toolDef {
 				},
 			},
 			Handler: func(args json.RawMessage) (json.RawMessage, error) {
-				var p struct{ Title string `json:"title"` }
+				var p struct {
+					Title string `json:"title"`
+				}
 				json.Unmarshal(args, &p)
 				notesMu.Lock()
 				delete(notes, p.Title)
@@ -291,8 +297,8 @@ func (s *server) handleMessage(r *http.Request, msg jsonrpcMessage) (*jsonrpcMes
 		headers["Mcp-Session-Id"] = sid
 		result, _ := json.Marshal(map[string]any{
 			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]any{"tools": map[string]any{}},
-			"serverInfo":     map[string]any{"name": "secure-notes", "version": "2.1.0"},
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "secure-notes", "version": "2.1.0"},
 		})
 		return &jsonrpcMessage{JSONRPC: "2.0", ID: msg.ID, Result: result}, headers
 

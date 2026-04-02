@@ -132,7 +132,7 @@ rules:
     match:
       methods: ["tools/call"]
       tools: ["exec_*"]
-      args:
+      arguments:
         command: ["*rm -rf*", "*sudo*", "*chmod 777*"]
     action: deny
 
@@ -141,7 +141,7 @@ rules:
     match:
       methods: ["tools/call"]
       tools: ["read_file"]
-      args:
+      arguments:
         path: ["/etc/*", "*.env", "*.pem", "*.key"]
     action: deny
 
@@ -344,9 +344,9 @@ plugins:
 
 routing:
   routes:
-    - match: ["exec_*", "run_*"]
+    - match_tools: ["exec_*", "run_*"]
       upstream: http://sandboxed-server:8080
-    - match: ["*"]
+    - match_tools: ["*"]
       upstream: http://default-server:8080
 
 cors:
@@ -375,6 +375,20 @@ telemetry:
 | `mcpgw disable` | Claude Code の設定を元に復元 |
 | `mcpgw policy validate` | ポリシー YAML ファイルを検証 |
 | `mcpgw version` | バージョンを表示 |
+
+---
+
+## 制限事項
+
+mcpgw は**ポリシー適用・監視レイヤー**であり、完全なセキュリティソリューションではない。以下の点に留意すること:
+
+- **MCP プロトコルのみ対象** — mcpgw はエージェントと MCP サーバー間の JSON-RPC メッセージを傍受する。ツール実装が行う直接の HTTP 呼び出し、ファイルシステムアクセス、シェルコマンドは制御できない。
+- **PII 検出は正規表現ベース** — クレジットカード、SSN、AWS キー、メール、電話番号をカバーする。すべてのシークレット形式（GitHub トークン、Stripe キー等）には対応していない。正確なパターンは PII プラグインのソースを参照。
+- **インジェクション検出はヒューリスティック** — スコアリングによる一般的なプロンプトインジェクションパターンの検出。巧妙な攻撃や難読化された攻撃は検出を回避する可能性がある。多層防御の一レイヤーとして扱うこと。
+- **ポリシールールは名前と引数で照合** — ルールはツール名と引数値を glob/正規表現でチェックする。セマンティックな意図の分析やコンテキスト依存の攻撃検出はできない。
+- **ツール説明文の汚染には明示的なルールが必要** — mcpgw はツールの*呼び出し*をブロックするが、ツールの*説明文*はブロックしない。汚染された説明文がエージェントをだまして行わせる呼び出しは、その呼び出しが deny ルールにマッチする場合のみブロックされる。
+
+最大限のセキュリティを実現するには、mcpgw をネットワークエグレス制御、ツールサンドボックス、定期的な監査ログレビューと併用すること。
 
 ---
 

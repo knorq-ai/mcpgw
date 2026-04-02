@@ -10,10 +10,10 @@ import (
 
 // Config はアプリケーション設定。
 type Config struct {
-	Upstream  string          `yaml:"upstream"`
-	Listen    string          `yaml:"listen"`
-	Policy    string          `yaml:"policy"`
-	AuditLog  string          `yaml:"audit_log"`
+	Upstream       string               `yaml:"upstream"`
+	Listen         string               `yaml:"listen"`
+	Policy         string               `yaml:"policy"`
+	AuditLog       string               `yaml:"audit_log"`
 	Routes         []RouteConfig        `yaml:"routes,omitempty"`
 	Auth           AuthConfig           `yaml:"auth"`
 	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
@@ -35,7 +35,7 @@ type Config struct {
 // ServerEvalConfig は MCP サーバー評価の設定。
 type ServerEvalConfig struct {
 	Enabled     bool              `yaml:"enabled"`
-	Mode        string            `yaml:"mode"`         // "enforce" or "audit"
+	Mode        string            `yaml:"mode"` // "enforce" or "audit"
 	Allowlist   []ServerEntry     `yaml:"allowlist"`
 	AutoApprove AutoApproveConfig `yaml:"auto_approve"`
 	Webhook     string            `yaml:"webhook"`
@@ -44,8 +44,8 @@ type ServerEvalConfig struct {
 // ServerEntry は許可リストのエントリ。
 type ServerEntry struct {
 	Name       string `yaml:"name"`
-	Upstream   string `yaml:"upstream"`     // glob パターン
-	Status     string `yaml:"status"`       // "approved"|"denied"|"pending"
+	Upstream   string `yaml:"upstream"` // glob パターン
+	Status     string `yaml:"status"`   // "approved"|"denied"|"pending"
 	ApprovedBy string `yaml:"approved_by"`
 	ApprovedAt string `yaml:"approved_at"`
 }
@@ -83,8 +83,8 @@ type MetricsConfig struct {
 // TelemetryConfig は分散トレーシングの設定。
 type TelemetryConfig struct {
 	OTLPEndpoint string  `yaml:"otlp_endpoint"` // OTLP エクスポーター宛先（空の場合は no-op）
-	ServiceName  string  `yaml:"service_name"`   // サービス名（デフォルト: "mcpgw"）
-	SampleRate   float64 `yaml:"sample_rate"`    // サンプリング率 0.0–1.0（デフォルト: 1.0）
+	ServiceName  string  `yaml:"service_name"`  // サービス名（デフォルト: "mcpgw"）
+	SampleRate   float64 `yaml:"sample_rate"`   // サンプリング率 0.0–1.0（デフォルト: 1.0）
 }
 
 // CORSConfig は CORS の設定。

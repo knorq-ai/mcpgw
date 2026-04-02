@@ -119,10 +119,10 @@ func scanAuditLog(path string, filter func(audit.Entry) bool) ([]audit.Entry, er
 
 func aggregate(entries []audit.Entry, dimension string) []analyticsGroup {
 	type groupData struct {
-		total      int
-		passed     int
-		blocked    int
-		toolCount  map[string]int
+		total       int
+		passed      int
+		blocked     int
+		toolCount   map[string]int
 		methodCount map[string]int
 	}
 

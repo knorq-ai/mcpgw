@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/stretchr/testify/assert"
 )
 
 type passInterceptor struct {

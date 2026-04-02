@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/knorq-ai/mcpgw/internal/auth"
 	"github.com/knorq-ai/mcpgw/internal/jsonrpc"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestToolRateLimitInterceptorBasic(t *testing.T) {

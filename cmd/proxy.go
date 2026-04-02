@@ -21,8 +21,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/spf13/cobra"
 	alertpkg "github.com/knorq-ai/mcpgw/internal/alert"
 	"github.com/knorq-ai/mcpgw/internal/audit"
 	"github.com/knorq-ai/mcpgw/internal/auth"
@@ -36,6 +34,8 @@ import (
 	"github.com/knorq-ai/mcpgw/internal/routing"
 	"github.com/knorq-ai/mcpgw/internal/servereval"
 	"github.com/knorq-ai/mcpgw/internal/telemetry"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -677,17 +677,14 @@ func validateConfig(upstream, tlsCert, tlsKey string) error {
 }
 
 // mgmtAPIKeyAuth は管理 API に API キー認証を適用するミドルウェア。
-// /api/* パスに対して X-API-Key ヘッダまたは ?api_key クエリパラメータを検証する。
+// /api/ パス配下に対して X-API-Key ヘッダを検証する。
 // 静的ファイル（ダッシュボード SPA）は認証をスキップする。
 func mgmtAPIKeyAuth(key string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// /api/* のみ認証を要求（SPA やファビコン等はスキップ）
-		if len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			got := r.Header.Get("X-API-Key")
-			if got == "" {
-				got = r.URL.Query().Get("api_key")
-			}
 			if subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
+				w.Header().Set("Content-Type", "application/json")
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
 			}

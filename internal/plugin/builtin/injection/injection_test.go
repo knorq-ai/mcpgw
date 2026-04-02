@@ -333,9 +333,9 @@ func TestHasScriptMixing(t *testing.T) {
 		want  bool
 	}{
 		{"pure latin", "hello", false},
-		{"latin+cyrillic", "hеllo", true},          // 'е' = Cyrillic U+0435
+		{"latin+cyrillic", "hеllo", true},                                // 'е' = Cyrillic U+0435
 		{"pure cyrillic", "\u043f\u0440\u0438\u0432\u0435\u0442", false}, // "привет"
-		{"short word", "ab", false},                  // < 3 文字はスキップ
+		{"short word", "ab", false},                                      // < 3 文字はスキップ
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -396,12 +396,12 @@ func TestExtractArgText(t *testing.T) {
 		{
 			name:   "ネストされた JSON",
 			params: json.RawMessage(`{"name":"tool","arguments":{"text":"injected text","nested":{"deep":"value"}}}`),
-			want:   "",  // 順序不定のため個別にチェックしない
+			want:   "", // 順序不定のため個別にチェックしない
 		},
 		{
 			name:   "配列内の文字列",
 			params: json.RawMessage(`{"items":["first","second","third"]}`),
-			want:   "",  // 順序不定のため個別にチェックしない
+			want:   "", // 順序不定のため個別にチェックしない
 		},
 		{
 			name:   "数値やブール値は無視される",

@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	enableConfigPath string
+	enableConfigPath  string
 	enableAllProjects bool
 )
 

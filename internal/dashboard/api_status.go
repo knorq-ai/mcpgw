@@ -6,10 +6,10 @@ import (
 )
 
 type statusResponse struct {
-	Upstream        string `json:"upstream"`
-	UpstreamReady   bool   `json:"upstream_ready"`
-	CircuitBreaker  string `json:"circuit_breaker"`
-	ActiveSessions  int    `json:"active_sessions"`
+	Upstream       string `json:"upstream"`
+	UpstreamReady  bool   `json:"upstream_ready"`
+	CircuitBreaker string `json:"circuit_breaker"`
+	ActiveSessions int    `json:"active_sessions"`
 }
 
 func handleStatus(provider StatusProvider) http.HandlerFunc {

@@ -21,9 +21,9 @@ type Decision struct {
 
 // Engine はポリシールールを評価する。
 type Engine struct {
-	policy             *PolicyFile
-	compiledArgPatterns []map[string][]*regexp.Regexp // ルールごとの argument_patterns コンパイル済み正規表現
-	compiledRespPatterns []*regexp.Regexp             // response_patterns コンパイル済み正規表現
+	policy               *PolicyFile
+	compiledArgPatterns  []map[string][]*regexp.Regexp // ルールごとの argument_patterns コンパイル済み正規表現
+	compiledRespPatterns []*regexp.Regexp              // response_patterns コンパイル済み正規表現
 }
 
 // NewEngine はポリシーファイルから Engine を構築する。
@@ -213,7 +213,7 @@ func globMatch(pattern, s string) bool {
 		return false
 	}
 
-	px, sx := 0, 0       // pattern index, string index
+	px, sx := 0, 0           // pattern index, string index
 	starPx, starSx := -1, -1 // 最後の '*' のパターン位置と文字列位置
 
 	for sx < len(s) {

@@ -27,5 +27,9 @@ demo-build: build-go
 demo: demo-build
 	@bash demo/run.sh
 
+poisoned-demo: build-go
+	go build -o demo/poisoned-server/poisoned-server ./demo/poisoned-server
+	@bash demo/poisoned-demo.sh
+
 demo-clean:
-	rm -f demo/server/demo-server demo/audit.jsonl
+	rm -f demo/server/demo-server demo/poisoned-server/poisoned-server demo/audit.jsonl

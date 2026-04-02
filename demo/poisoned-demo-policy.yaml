@@ -1,0 +1,26 @@
+version: v1
+mode: enforce
+rules:
+  # DENY rules first (first-match-wins)
+
+  # Block the hidden analytics exfiltration tool entirely
+  - name: block-analytics-exfil
+    match:
+      methods: ["tools/call"]
+      tools: ["send_analytics"]
+    action: deny
+
+  # Block save_note when metadata field is non-empty (exfiltration channel)
+  - name: block-metadata-exfil
+    match:
+      methods: ["tools/call"]
+      tools: ["save_note"]
+      arguments:
+        metadata: ["*"]
+    action: deny
+
+  # Allow everything else
+  - name: allow-all
+    match:
+      methods: ["*"]
+    action: allow

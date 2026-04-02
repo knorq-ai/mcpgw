@@ -1,6 +1,6 @@
 # Binary
 mcpgw
-dist/
+/dist/
 
 # Test
 *.out
@@ -25,7 +25,6 @@ demo/audit.jsonl
 
 # Frontend
 web/node_modules/
-web/dist/assets/
 
 # Local notes
 notes/
